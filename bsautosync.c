@@ -97,7 +97,12 @@ struct bsAutoSyncLedger
   int count;
   int alloc;
   bsAutoSyncEntry *list;
+  int owlignorecount;
+  int owlignorealloc;
+  int64_t *owlignore;
 };
+
+#define BS_AUTOSYNC_OWLIGNORE_FILE BS_GLOBAL_PATH "bricksync.owlignore.txt"
 
 enum
 {
@@ -464,22 +469,133 @@ static void bsAutoSyncCarryOver( bsContext *context, bsxInventory *inv, bsxInven
 
 /* 1 if this BrickOwl update sets or clears a sale percentage, or creates a lot that needs one
    (BrickOwl takes no sale percentage on creation, it is set by the next comparison) */
-static int bsAutoSyncDiffTouchesSale( bsxInventory *diffinv )
+static int bsAutoSyncDiffTouchesSale( bsxInventory *diffinv, bsxInventory *salesent )
 {
-  int itemindex;
+  int itemindex, saleflag;
   bsxItem *item;
 
+  saleflag = 0;
+  bsxEmptyInventory( salesent );
   for( itemindex = 0 ; itemindex < diffinv->itemcount ; itemindex++ )
   {
     item = &diffinv->itemlist[itemindex];
     if( item->flags & BSX_ITEM_FLAGS_DELETED )
       continue;
     if( ( item->flags & BSX_ITEM_XFLAGS_TO_UPDATE ) && ( item->flags & BSX_ITEM_XFLAGS_UPDATE_SALE ) )
-      return 1;
+    {
+      bsxAddCopyItem( salesent, item );
+      saleflag = 1;
+    }
     if( ( item->flags & BSX_ITEM_XFLAGS_TO_CREATE ) && ( item->sale > 0 ) )
+      saleflag = 1;
+  }
+  return saleflag;
+}
+
+
+static int bsAutoSyncOwlIgnored( bsContext *context, int64_t lotid )
+{
+  int index;
+  struct bsAutoSyncLedger *ledger;
+
+  ledger = context->autosyncledger;
+  for( index = 0 ; index < ledger->owlignorecount ; index++ )
+  {
+    if( ledger->owlignore[index] == lotid )
       return 1;
   }
   return 0;
+}
+
+
+static void bsAutoSyncOwlIgnoreAdd( bsContext *context, int64_t lotid )
+{
+  struct bsAutoSyncLedger *ledger;
+
+  if( bsAutoSyncOwlIgnored( context, lotid ) )
+    return;
+  ledger = context->autosyncledger;
+  if( ledger->owlignorecount >= ledger->owlignorealloc )
+  {
+    ledger->owlignorealloc = ( ledger->owlignorealloc ? ledger->owlignorealloc << 1 : 64 );
+    ledger->owlignore = realloc( ledger->owlignore, ledger->owlignorealloc * sizeof(int64_t) );
+  }
+  ledger->owlignore[ledger->owlignorecount++] = lotid;
+  return;
+}
+
+
+static int bsAutoSyncOwlIgnoreLoad( bsContext *context )
+{
+  FILE *file;
+  long long lotid, timestamp;
+  int sale, fields, result;
+
+  if( !( ccFileExists( BS_AUTOSYNC_OWLIGNORE_FILE ) ) )
+    return 1;
+  file = fopen( BS_AUTOSYNC_OWLIGNORE_FILE, "r" );
+  if( !( file ) )
+    return 0;
+  while( ( fields = fscanf( file, "%lld %d %lld", &lotid, &sale, &timestamp ) ) == 3 )
+    bsAutoSyncOwlIgnoreAdd( context, lotid );
+  result = ( fields == EOF ) && !( ferror( file ) );
+  if( fclose( file ) )
+    result = 0;
+  return result;
+}
+
+
+static void bsAutoSyncFilterOwlIgnored( bsContext *context, bsxInventory *inv )
+{
+  int itemindex;
+  bsxItem *item;
+
+  for( itemindex = 0 ; itemindex < inv->itemcount ; itemindex++ )
+  {
+    item = &inv->itemlist[itemindex];
+    if( !( item->flags & BSX_ITEM_FLAGS_DELETED ) && bsAutoSyncOwlIgnored( context, item->lotid ) )
+      bsxRemoveItem( inv, item );
+  }
+  return;
+}
+
+
+/* A repeated sale difference after an acknowledged pass permanently excludes the lot. */
+static int bsAutoSyncIgnoreUnappliedSales( bsContext *context, bsxInventory *salesent )
+{
+  int itemindex, ignoredcount, result;
+  bsxItem *item, *sentitem, *stockitem;
+  FILE *file;
+
+  ignoredcount = 0;
+  for( itemindex = 0 ; itemindex < context->brickowl.diffinv->itemcount ; itemindex++ )
+  {
+    item = &context->brickowl.diffinv->itemlist[itemindex];
+    if( ( item->flags & BSX_ITEM_FLAGS_DELETED ) || !( item->flags & BSX_ITEM_XFLAGS_TO_UPDATE ) || !( item->flags & BSX_ITEM_XFLAGS_UPDATE_SALE ) )
+      continue;
+    sentitem = bsxFindLotID( salesent, item->lotid );
+    if( !( sentitem ) || ( sentitem->sale != item->sale ) )
+      continue;
+    stockitem = bsxFindLotID( context->inventory, item->lotid );
+    if( !( stockitem ) || bsAutoSyncOwlIgnored( context, item->lotid ) )
+      continue;
+    file = fopen( BS_AUTOSYNC_OWLIGNORE_FILE, "a" );
+    if( !( file ) )
+      return -1;
+    result = ( fprintf( file, "%lld %d %lld\n", (long long)item->lotid, item->sale, (long long)time( 0 ) ) > 0 );
+    if( fflush( file ) || fsync( fileno( file ) ) )
+      result = 0;
+    if( fclose( file ) )
+      result = 0;
+    if( !( result ) )
+      return -1;
+    bsAutoSyncOwlIgnoreAdd( context, item->lotid );
+    bsxRemoveItem( context->inventory, stockitem );
+    context->contextflags |= BS_CONTEXT_FLAGS_UPDATED_INVENTORY;
+    ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_WARNING "Auto sync: BrickLink lot " CC_LLD " sale %d percent did not appear on BrickOwl; removing it from BrickOwl and ignoring it permanently.\n", (long long)item->lotid, item->sale );
+    ignoredcount++;
+  }
+  return ignoredcount;
 }
 
 
@@ -504,9 +620,9 @@ static void bsAutoSyncSetUsedGrades( bsxInventory *inv )
 
 static int bsAutoSyncCycleOnce( bsContext *context )
 {
-  int pendingcount, owlpass, saleflag;
+  int pendingcount, owlpass, saleflag, salereadback, ignoredcount;
   int64_t ordertopdate;
-  bsxInventory *inv;
+  bsxInventory *inv, *salesent;
   bsOrderList orderlist;
   bsSyncStats stats;
   journalDef journal;
@@ -551,6 +667,7 @@ static int bsAutoSyncCycleOnce( bsContext *context )
     return BS_AUTOSYNC_CYCLE_FAILED;
   }
   bsInventoryFilterOutItems( context, inv );
+  bsAutoSyncFilterOwlIgnored( context, inv );
 
   /* 3. BrickOwl sales owed to BrickLink */
   pendingcount = bsAutoSyncSettleLedger( context, inv );
@@ -591,11 +708,14 @@ static int bsAutoSyncCycleOnce( bsContext *context )
 
   /* 5. BrickOwl: live read, then only the differences.
      If a reply was lost on the way, read BrickOwl again right away and settle what is left */
+  salesent = bsxNewInventory();
+  salereadback = 0;
   for( owlpass = 0 ; ; owlpass++ )
   {
     context->stateflags &= ~( BS_STATE_FLAGS_BRICKOWL_MUST_CHECK | BS_STATE_FLAGS_BRICKOWL_MUST_SYNC );
     if( !( bsSyncBrickOwl( context, &stats ) ) )
     {
+      bsxFreeInventory( salesent );
       if( context->stateflags & BS_STATE_FLAGS_BRICKOWL_MUST_CHECK )
       {
         ioPrintf( &context->output, 0, BSMSG_INFO "Auto sync: a BrickOwl order arrived during the inventory read, starting the cycle over.\n" );
@@ -604,32 +724,52 @@ static int bsAutoSyncCycleOnce( bsContext *context )
       bsAutoSyncSetError( context, "reading the live BrickOwl inventory failed, BrickOwl was not updated" );
       return BS_AUTOSYNC_CYCLE_FAILED;
     }
-    saleflag = bsAutoSyncDiffTouchesSale( context->brickowl.diffinv );
+    if( salereadback )
+    {
+      ignoredcount = bsAutoSyncIgnoreUnappliedSales( context, salesent );
+      if( ignoredcount < 0 )
+      {
+        bsxFreeInventory( salesent );
+        bsAutoSyncSetError( context, "the permanent BrickOwl ignore record could not be saved to disk" );
+        return BS_AUTOSYNC_CYCLE_FAILED;
+      }
+      if( ignoredcount )
+      {
+        bsxEmptyInventory( salesent );
+        bsxEmptyInventory( context->brickowl.diffinv );
+        salereadback = 0;
+        continue;
+      }
+    }
+    saleflag = bsAutoSyncDiffTouchesSale( context->brickowl.diffinv, salesent );
     if( !( bsQueryBrickOwlApplyDiff( context, context->brickowl.diffinv, 0 ) ) )
     {
       bsxEmptyInventory( context->brickowl.diffinv );
+      bsxFreeInventory( salesent );
       bsAutoSyncSetError( context, "the BrickOwl update did not complete, the next cycle compares again and finishes it" );
       return BS_AUTOSYNC_CYCLE_FAILED;
     }
     bsxEmptyInventory( context->brickowl.diffinv );
+    salereadback = !( context->stateflags & BS_STATE_FLAGS_BRICKOWL_MUST_SYNC );
     if( !( context->stateflags & BS_STATE_FLAGS_BRICKOWL_MUST_SYNC ) && !( saleflag ) )
       break;
     if( owlpass >= 2 )
     {
-      if( !( context->stateflags & BS_STATE_FLAGS_BRICKOWL_MUST_SYNC ) )
+      if( context->stateflags & BS_STATE_FLAGS_BRICKOWL_MUST_SYNC )
       {
-        /* A sale percentage BrickOwl does not show is not a failed sync */
-        ioPrintf( &context->output, IO_MODEBIT_LOGONLY, "LOG: Auto sync: BrickOwl does not show a sale percentage that was sent.\n" );
-        break;
+        bsxFreeInventory( salesent );
+        bsAutoSyncSetError( context, "BrickOwl replies kept getting lost, the next cycle compares again" );
+        return BS_AUTOSYNC_CYCLE_FAILED;
       }
-      bsAutoSyncSetError( context, "BrickOwl replies kept getting lost, the next cycle compares again" );
-      return BS_AUTOSYNC_CYCLE_FAILED;
+      if( !( salesent->itemcount ) )
+        break;
     }
     if( context->stateflags & BS_STATE_FLAGS_BRICKOWL_MUST_SYNC )
       ioPrintf( &context->output, 0, BSMSG_INFO "Auto sync: a BrickOwl reply was lost, reading BrickOwl again to confirm.\n" );
     else
       ioPrintf( &context->output, 0, BSMSG_INFO "Auto sync: a sale percentage was sent, reading BrickOwl back to confirm it.\n" );
   }
+  bsxFreeInventory( salesent );
   context->brickowl.lastsynctime = time( 0 );
 
   if( pendingcount )
@@ -730,6 +870,11 @@ void bsAutoSyncInit( bsContext *context )
   if( !( bsAutoSyncLedgerLoad( context ) ) )
   {
     ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_ERROR "The file of pending BrickLink deductions \"" IO_RED "%s" IO_WHITE "\" is damaged. Fix or remove it, then start again.\n", BS_AUTOSYNC_LEDGER_FILE );
+    bsFatalError( context );
+  }
+  if( !( bsAutoSyncOwlIgnoreLoad( context ) ) )
+  {
+    ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_ERROR "Could not read the permanent BrickOwl ignore file \"%s\".\n", BS_AUTOSYNC_OWLIGNORE_FILE );
     bsFatalError( context );
   }
   ioPrintf( &context->output, 0, BSMSG_INIT "Auto sync is " IO_GREEN "on" IO_DEFAULT ": BrickLink is the master, a cycle runs every " IO_CYAN "%d" IO_DEFAULT " seconds. Pending BrickLink deductions: " IO_CYAN "%d" IO_DEFAULT ".\n", context->autosyncinterval, (context->autosyncledger)->count );

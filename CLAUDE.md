@@ -24,3 +24,4 @@ Two Claude instances made changes to this repository that T did not ask for, wit
 ## Open task for T
 
 - Used grades: T picks the words that make a used item Acceptable. The list is empty in `bsevalgrade.c` (`bsDefectWords`) until T gives the words. Until then every used item except sets is Good.
+- Stockade quarantine section: show every item listed in data/bricksync.owlignore.txt (taken off Brick Owl because the sale would not go on) so T can review them and handle them by hand. This is a future interface task.
