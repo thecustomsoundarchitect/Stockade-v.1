@@ -300,6 +300,8 @@ bsContext *bsInit( char *statepath, int *retstateloaded )
     ioPrintf( &context->output, 0, BSMSG_ERROR "Failed to read configuration file at \"" IO_RED "%s" CC_DIR_SEPARATOR_STRING "%s" IO_WHITE "\".\n", context->cwd, BS_CONFIGURATION_FILE );
     goto error;
   }
+  if( context->autosyncflag )
+    context->retainemptylotsflag = 0;
 
   /* Ensure reasonable values */
   if( context->bricklink.pollinterval < BS_POLL_SUCCESS_INTERVAL_MIN )

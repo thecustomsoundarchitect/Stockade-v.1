@@ -206,6 +206,59 @@ def test_owl_sales_sell_out_every_lot_once():
         e.cleanup()
 
 
+def test_autosync_sellout_ignores_retainemptylots():
+    e = Env()
+    try:
+        with open(e.path("data", "bricksync.conf.txt"), "a") as f:
+            f.write("retainemptylots = 1;\n")
+        a = e.bl.add_lot("3001", 10, 1.25)
+        b = e.bl.add_lot("3002", 5, 0.50, cond="U")
+        e.start()
+        check(e.status()["result"] == "ok", "first cycle failed")
+        in_step(e)
+        owlids = {lotid: e.bo.find(lotid)["lot_id"] for lotid in (a, b)}
+        remaining_bl = dict(e.bl.lots[b])
+        remaining_owl = dict(e.bo.find(b))
+        e.bl.server.clear_log()
+        e.bo.server.clear_log()
+
+        e.bo.sale({a: 2})
+        check(e.cycle()["result"] == "ok", "partial Brick Owl sale failed")
+        check(e.bl.qty(a) == 8 and e.bo.qty(a) == 8, "partial sale did not reach BrickLink")
+        check(not e.bl.lots[a]["is_stock_room"], "partial sale put the lot in stockroom")
+        check(bl_quantity_writes(e) == [(a, -2, "ok")], "partial sale was not deducted once: %r" % bl_quantity_writes(e))
+
+        e.bo.sale({a: 8})
+        check(e.cycle()["result"] == "ok", "Brick Owl sellout failed")
+        check(e.bl.qty(a) is None, "sold out BrickLink lot was retained in stockroom: %r" % e.bl.lots.get(a))
+        check(e.bo.find(a) is None and e.bo.lots[owlids[a]]["qty"] == 0, "Brick Owl did not retain its sold out record at zero")
+        check(e.bl.lots[b] == remaining_bl and e.bo.find(b) == remaining_owl, "the other lot changed after sellout")
+        expected = [(a, -2, "ok"), ("DELETE", "/api/store/v1/inventories/%d" % a, "ok")]
+        check(bl_quantity_writes(e) == expected, "sellout did not delete BrickLink exactly once: %r" % bl_quantity_writes(e))
+        check(all(not json.loads(w[3]).get("is_stock_room", False) for w in e.bl.server.writes() if w[0] == "PUT"), "auto sync wrote a stockroom mark")
+        in_step(e)
+
+        e.bl.sale({b: 5})
+        status = e.cycle()
+        check(status["result"] == "ok" and status["lots"] == 0, "last BrickLink lot sellout failed: %r" % status)
+        check(e.bl.lots == {} and e.bo.active_count() == 0, "sold out lots remain active")
+        check(set(e.bo.lots) == set(owlids.values()) and all(lot["qty"] == 0 for lot in e.bo.lots.values()), "Brick Owl did not keep both original zero quantity records")
+        writes = e.bo.server.writes()
+        check(len(writes) == 1 and writes[0][1] == "/v1/inventory/update" and "absolute_quantity=0" in writes[0][3], "Brick Owl did not receive only the final zero quantity update: %r" % writes)
+        for _ in range(2):
+            check(e.cycle()["result"] == "ok", "empty cycle after sellout failed")
+        e.stop()
+        e.start()
+        check(e.status()["result"] == "ok", "restart after sellout failed")
+        check(e.cycle()["result"] == "ok", "cycle after sellout restart failed")
+        check(e.bl.lots == {} and set(e.bo.lots) == set(owlids.values()) and all(lot["qty"] == 0 for lot in e.bo.lots.values()), "restart recreated or removed a sold out lot")
+        check(bl_quantity_writes(e) == expected, "restart repeated a BrickLink deduction: %r" % bl_quantity_writes(e))
+        check(e.bo.server.writes() == writes, "restart wrote a sold out Brick Owl lot again")
+        check(not any(w[1] == "/v1/inventory/delete" for w in e.bo.server.writes()), "auto sync called Brick Owl inventory delete")
+    finally:
+        e.cleanup()
+
+
 def test_sales_on_both_stores_same_cycle():
     e, (a, b) = start()
     try:
