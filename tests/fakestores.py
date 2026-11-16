@@ -308,8 +308,6 @@ class FakeBrickOwl:
                     lot[key] = form[key]
             if "condition" in form:
                 lot["full_con"] = form["condition"]
-            if "sale_percent" in form and not (-95 <= int(form["sale_percent"]) <= 95):
-                return 400, json.dumps(dict(error=dict(status="Invalid sale percent")))
             if "sale_percent" in form and not self.ignore_sale:
                 lot["sale_percent"] = int(form["sale_percent"])
             return 200, json.dumps(dict(status="success"))

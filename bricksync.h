@@ -446,7 +446,6 @@ typedef struct
   /* Auto sync: BrickLink is the master, see bsautosync.c */
   int autosyncflag;
   int autosyncinterval;
-  int autosyncmaxdrop;
   time_t autosynctime;
   int autosyncfailcount;
   int autosynccyclecount;
@@ -574,11 +573,7 @@ typedef struct
 #define BS_AUTOSYNC_STATUS_TEMP_FILE BS_GLOBAL_PATH "temp.autosync.status.json"
 #define BS_AUTOSYNC_INTERVAL_DEFAULT (5*60)
 #define BS_AUTOSYNC_INTERVAL_MIN (60)
-#define BS_AUTOSYNC_MAXDROP_DEFAULT (50)
-#define BS_AUTOSYNC_GUARD_MINLOTS (20)
 #define BS_AUTOSYNC_ALERT_FAILCOUNT (4)
-/* BrickOwl accepts sale_percent as a whole number up to 95 */
-#define BS_BRICKOWL_SALE_MAX (95)
 
 void bsAutoSyncInit( bsContext *context );
 /* Run one cycle if one is due. Called by the main loop instead of the check/update/sync steps */

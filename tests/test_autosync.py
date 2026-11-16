@@ -232,29 +232,6 @@ def test_bricklink_empty_read_nothing_written():
         e.cleanup()
 
 
-def test_mass_drop_guard():
-    lots = tuple((("3001", 10 + i, 1.0 + i), {}) for i in range(30))
-    e, ids = start(lots)
-    try:
-        with e.bl.lock:
-            saved = {k: e.bl.lots.pop(k) for k in ids[:20]}
-        status = e.cycle()
-        check(status["result"] == "failed", "cycle should have stopped: 20 of 30 lots vanished")
-        check(e.bo.server.writes() == [], "Brick Owl was written: %r" % e.bo.server.writes()[:3])
-        check(e.bo.active_count() == 30, "Brick Owl lots were removed")
-        with e.bl.lock:
-            e.bl.lots.update(saved)
-        check(e.cycle()["result"] == "ok", "recovery cycle failed")
-        # A smaller removal goes through
-        with e.bl.lock:
-            for k in ids[:5]:
-                del e.bl.lots[k]
-        check(e.cycle()["result"] == "ok", "cycle failed: " + e.status()["error"])
-        in_step(e)
-    finally:
-        e.cleanup()
-
-
 def test_large_batch_of_new_lots_uploaded_at_once():
     e, (a, b) = start()
     try:

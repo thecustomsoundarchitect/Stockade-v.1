@@ -23,7 +23,7 @@
 
 int bsEvalulatePartCondition( char *comments );
 
-/* Stockade grading rule: 1 if the public note clearly describes a condition problem, 0 if blank or harmless */
+/* Stockade grading rule: 1 if the public note has one of the words picked by Tammy in it, 0 otherwise */
 int bsNoteDescribesDefect( const char *comments );
 
 

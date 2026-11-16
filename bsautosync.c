@@ -476,15 +476,15 @@ static int bsAutoSyncDiffTouchesSale( bsxInventory *diffinv )
       continue;
     if( ( item->flags & BSX_ITEM_XFLAGS_TO_UPDATE ) && ( item->flags & BSX_ITEM_XFLAGS_UPDATE_SALE ) )
       return 1;
-    if( ( item->flags & BSX_ITEM_XFLAGS_TO_CREATE ) && ( item->sale > 0 ) && ( item->sale <= BS_BRICKOWL_SALE_MAX ) )
+    if( ( item->flags & BSX_ITEM_XFLAGS_TO_CREATE ) && ( item->sale > 0 ) )
       return 1;
   }
   return 0;
 }
 
 
-/* Used grades: a used item is Good, or Acceptable when its public note clearly describes a condition
-   problem. New items and sets are left alone. The BrickOwl comparison then creates lots with this grade
+/* Used grades: a used item is Good, or Acceptable when its public note has one of the words picked by
+   Tammy in it (bsevalgrade.c). New items and sets are left alone. The BrickOwl comparison then creates lots with this grade
    and corrects the grade of the lots BrickOwl already holds. */
 static void bsAutoSyncSetUsedGrades( bsxInventory *inv )
 {
@@ -504,7 +504,7 @@ static void bsAutoSyncSetUsedGrades( bsxInventory *inv )
 
 static int bsAutoSyncCycleOnce( bsContext *context )
 {
-  int oldlots, newlots, pendingcount, owllots, owldrops, owlpass, saleflag;
+  int pendingcount, owlpass, saleflag;
   int64_t ordertopdate;
   bsxInventory *inv;
   bsOrderList orderlist;
@@ -551,14 +551,6 @@ static int bsAutoSyncCycleOnce( bsContext *context )
     return BS_AUTOSYNC_CYCLE_FAILED;
   }
   bsInventoryFilterOutItems( context, inv );
-  oldlots = bsAutoSyncActiveLots( context->inventory );
-  newlots = bsAutoSyncActiveLots( inv );
-  if( ( oldlots >= BS_AUTOSYNC_GUARD_MINLOTS ) && ( ( (int64_t)newlots * 100 ) < ( (int64_t)oldlots * ( 100 - context->autosyncmaxdrop ) ) ) )
-  {
-    bsxFreeInventory( inv );
-    bsAutoSyncSetError( context, "BrickLink shows %d lots where there were %d, a drop over %d percent. Nothing was written. If this is intended, run the command: blmaster on, then blmaster off", newlots, oldlots, context->autosyncmaxdrop );
-    return BS_AUTOSYNC_CYCLE_FAILED;
-  }
 
   /* 3. BrickOwl sales owed to BrickLink */
   pendingcount = bsAutoSyncSettleLedger( context, inv );
@@ -610,14 +602,6 @@ static int bsAutoSyncCycleOnce( bsContext *context )
         return BS_AUTOSYNC_CYCLE_RESTART;
       }
       bsAutoSyncSetError( context, "reading the live BrickOwl inventory failed, BrickOwl was not updated" );
-      return BS_AUTOSYNC_CYCLE_FAILED;
-    }
-    owldrops = stats.deleteorphan_lotcount + stats.deleteduplicate_lotcount;
-    owllots = owldrops + stats.match_lotcount + stats.skipflag_lotcount;
-    if( ( owllots >= BS_AUTOSYNC_GUARD_MINLOTS ) && ( ( (int64_t)owldrops * 100 ) > ( (int64_t)owllots * context->autosyncmaxdrop ) ) )
-    {
-      bsxEmptyInventory( context->brickowl.diffinv );
-      bsAutoSyncSetError( context, "the update would remove %d of %d BrickOwl lots, over %d percent. BrickOwl was not updated", owldrops, owllots, context->autosyncmaxdrop );
       return BS_AUTOSYNC_CYCLE_FAILED;
     }
     saleflag = bsAutoSyncDiffTouchesSale( context->brickowl.diffinv );
@@ -740,10 +724,6 @@ void bsAutoSyncInit( bsContext *context )
   if( context->autosyncinterval < BS_AUTOSYNC_INTERVAL_MIN )
     context->autosyncinterval = BS_AUTOSYNC_INTERVAL_MIN;
 #endif
-  if( context->autosyncmaxdrop < 1 )
-    context->autosyncmaxdrop = 1;
-  if( context->autosyncmaxdrop > 100 )
-    context->autosyncmaxdrop = 100;
   if( !( bsAutoSyncLedgerLoad( context ) ) )
   {
     ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_ERROR "The file of pending BrickLink deductions \"" IO_RED "%s" IO_WHITE "\" is damaged. Fix or remove it, then start again.\n", BS_AUTOSYNC_LEDGER_FILE );

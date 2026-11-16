@@ -211,13 +211,8 @@ void bsSyncAddDeltaItem( bsContext *context, bsxInventory *deltainv, bsxItem *st
   /* Sale percentage: BrickOwl carries BrickLink's exact percentage, 0 when the BrickLink sale ended */
   if( ( deltamode == BS_SYNC_DELTA_MODE_BRICKOWL ) && ( context->autosyncflag ) && ( item->sale != stockitem->sale ) )
   {
-    if( ( stockitem->sale < 0 ) || ( stockitem->sale > BS_BRICKOWL_SALE_MAX ) )
-      ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "LOG: Sale of %d percent is outside what BrickOwl accepts (0 to %d), not sent%s\n", stockitem->sale, BS_BRICKOWL_SALE_MAX, itemstringbuffer );
-    else
-    {
-      updateflags |= BSX_ITEM_XFLAGS_UPDATE_SALE;
-      ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "LOG: Set Sale from %d to %d percent%s\n", item->sale, stockitem->sale, itemstringbuffer );
-    }
+    updateflags |= BSX_ITEM_XFLAGS_UPDATE_SALE;
+    ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "LOG: Set Sale from %d to %d percent%s\n", item->sale, stockitem->sale, itemstringbuffer );
   }
   if( !( bsInvItemTierEqual( item, stockitem ) ) )
   {

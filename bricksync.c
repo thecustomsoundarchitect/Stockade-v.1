@@ -284,7 +284,6 @@ bsContext *bsInit( char *statepath, int *retstateloaded )
   context->findordertime = 7 * (24*60*60);
   context->autosyncflag = 0;
   context->autosyncinterval = BS_AUTOSYNC_INTERVAL_DEFAULT;
-  context->autosyncmaxdrop = BS_AUTOSYNC_MAXDROP_DEFAULT;
 #if BS_ENABLE_MATHPUZZLE
   context->puzzleanswer.i = 8;
 #endif

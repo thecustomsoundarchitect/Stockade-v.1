@@ -12,8 +12,6 @@ autocheck = 1;
 // A BrickOwl sale is deducted from BrickLink once. BrickLink is never overwritten from the saved copy.
 autosync = 1;
 autosyncinterval = 300;
-// Safety stop: if more than this percent of the lots would vanish in one cycle, nothing is written.
-autosyncmaxdrop = 50;
 
 
 

@@ -295,49 +295,21 @@ int bsEvalulatePartCondition( char *comments )
 ////
 
 
-/* Stockade grading rule. A used item is Good unless its public note clearly describes a condition
-   problem. A defect word counts unless the sentence denies it ("no scratches, cracks or bites",
-   "scratch free"); "but", "except" and the like end the denial ("no cracks but yellowed"). */
+/* Stockade grading rule: a used item is Good. If its public note has one of the words below in it,
+   it is Acceptable. Sets are not graded by this rule.
 
-static const char * const bsDefectPrefixes[] =
-{
-  "scratch", "crack", "broke", "damag", "discolo", "dent", "chew", "bite", "bitten", "gash", "worn", "wear",
-  "stress", "missing", "stain", "dirty", "bent", "warp", "torn", "tear", "chip", "scuff", "melt", "glue",
-  "crease", "peel", "rust", "defect", "flaw", "fault", "imperfect", "rubbed", 0
-};
-
+   TASK FOR TAMMY: pick the words. The list is empty until Tammy gives the words; nobody else picks
+   them. While it is empty every used item (except sets) is Good.
+   Each word goes on its own line, in lower case, inside quotes, followed by a comma, above the 0. */
 static const char * const bsDefectWords[] =
 {
-  "yellowed", "yellowing", "fade", "faded", "fading", "nick", "nicks", "nicked", "marks", "loose", "split",
-  "cut", "cuts", "poor", "bad", "tooth", "teeth", 0
+  0
 };
-
-static const char * const bsDenyWords[] =
-{
-  "no", "not", "non", "never", "without", "zero", "nothing", "none", "isn", "aren", "wasn", "doesn", "don", "didn", 0
-};
-
-static const char * const bsDenyEndWords[] =
-{
-  "but", "except", "however", "although", "though", 0
-};
-
-static int bsNoteWordInList( const char *word, int length, const char * const *list, int prefixflag )
-{
-  int index, listlength;
-  for( index = 0 ; list[index] ; index++ )
-  {
-    listlength = strlen( list[index] );
-    if( ( prefixflag ? ( length >= listlength ) : ( length == listlength ) ) && !( memcmp( word, list[index], listlength ) ) )
-      return 1;
-  }
-  return 0;
-}
 
 int bsNoteDescribesDefect( const char *comments )
 {
-  int index, length, nextlength, denyflag, defectflag;
-  char *note, *word, *next;
+  int index, length, defectflag;
+  char *note;
   char c;
 
   if( !( comments ) )
@@ -350,34 +322,13 @@ int bsNoteDescribesDefect( const char *comments )
     note[index] = ( ( c >= 'A' ) && ( c <= 'Z' ) ? c + ( 'a' - 'A' ) : c );
   }
   note[length] = 0;
-
-  denyflag = 0;
   defectflag = 0;
-  for( word = note ; *word ; word += length )
+  for( index = 0 ; bsDefectWords[index] ; index++ )
   {
-    if( !( ( *word >= 'a' ) && ( *word <= 'z' ) ) )
+    if( strstr( note, bsDefectWords[index] ) )
     {
-      /* The end of a sentence ends a denial; commas and hyphens do not */
-      if( ( *word == '.' ) || ( *word == ';' ) || ( *word == '!' ) || ( *word == '?' ) || ( *word == '\n' ) || ( *word == '\r' ) )
-        denyflag = 0;
-      length = 1;
-      continue;
-    }
-    for( length = 1 ; ( word[length] >= 'a' ) && ( word[length] <= 'z' ) ; length++ );
-    if( bsNoteWordInList( word, length, bsDenyWords, 0 ) )
-      denyflag = 1;
-    else if( bsNoteWordInList( word, length, bsDenyEndWords, 0 ) )
-      denyflag = 0;
-    else if( bsNoteWordInList( word, length, bsDefectPrefixes, 1 ) || bsNoteWordInList( word, length, bsDefectWords, 0 ) )
-    {
-      /* "scratch free", "scratch-free" */
-      for( next = word + length ; ( *next == ' ' ) || ( *next == '-' ) ; next++ );
-      for( nextlength = 0 ; ( next[nextlength] >= 'a' ) && ( next[nextlength] <= 'z' ) ; nextlength++ );
-      if( !( denyflag ) && !( ( nextlength == 4 ) && !( memcmp( next, "free", 4 ) ) ) )
-      {
-        defectflag = 1;
-        break;
-      }
+      defectflag = 1;
+      break;
     }
   }
   free( note );
