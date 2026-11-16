@@ -1,0 +1,4 @@
+
+========== Log Start ~ 2026-11-16 15:15:34 ==========
+
+15:15:34 JSON LEX: Line 0, offset 0: Bad character 0x3c in string.
