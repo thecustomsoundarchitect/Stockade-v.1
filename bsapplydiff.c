@@ -835,7 +835,23 @@ static void bsBrickOwlApplyDiffUpdate( bsContext *context, bsxItem *item, int it
   else
     ccGrowthPrintf( &postgrowth, "&external_id="CC_LLD"", (long long)item->lotid );
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_QUANTITY )
-    ccGrowthPrintf( &postgrowth, "&relative_quantity=%d", item->quantity );
+  {
+    /* Auto sync: the saved copy is the target, so the quantity is sent as it must end up.
+       Sent twice (a lost reply, a retry) it still ends up right; a relative change would count twice. */
+    bsxItem *targetitem;
+    targetitem = 0;
+    if( context->autosyncflag )
+    {
+      if( item->lotid >= 0 )
+        targetitem = bsxFindLotID( context->inventory, item->lotid );
+      if( !( targetitem ) && ( item->bolotid >= 0 ) )
+        targetitem = bsxFindOwlLotID( context->inventory, item->bolotid );
+    }
+    if( targetitem )
+      ccGrowthPrintf( &postgrowth, "&absolute_quantity=%d", ( targetitem->quantity > 0 ? targetitem->quantity : 0 ) );
+    else
+      ccGrowthPrintf( &postgrowth, "&relative_quantity=%d", item->quantity );
+  }
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_COMMENTS )
   {
     encodedstring = 0;

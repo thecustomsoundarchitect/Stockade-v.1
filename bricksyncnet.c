@@ -520,9 +520,16 @@ int bsResolveServiceAddresses( bsContext *context )
   DEBUG_SET_TRACKER();
 
   ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_INIT "Resolving IP addresses for API and WEB services.\n" );
+#ifdef BS_TEST_HOOKS
+  /* Test builds only (never a release build): the stores are local fakes, see tests/ */
+  blapiaddress = strdup( "127.0.0.1" );
+  blwebaddress = strdup( "127.0.0.1" );
+  boapiaddress = strdup( "127.0.0.1" );
+#else
   blapiaddress = bsResolveServer( context, BS_BRICKLINK_API_SERVER );
   blwebaddress = ( blapiaddress ? bsResolveServer( context, BS_BRICKLINK_WEB_SERVER ) : 0 );
   boapiaddress = ( blwebaddress ? bsResolveServer( context, BS_BRICKOWL_API_SERVER ) : 0 );
+#endif
   if( !( boapiaddress ) )
   {
     free( blapiaddress );
@@ -542,12 +549,24 @@ void bsOpenServiceConnections( bsContext *context )
 {
   DEBUG_SET_TRACKER();
 
+#ifdef BS_TEST_HOOKS
+  {
+    int blport, boport, testflags;
+    blport = atoi( getenv( "BS_TEST_BL_PORT" ) ? getenv( "BS_TEST_BL_PORT" ) : "0" );
+    boport = atoi( getenv( "BS_TEST_BO_PORT" ) ? getenv( "BS_TEST_BO_PORT" ) : "0" );
+    testflags = HTTP_CONNECTION_FLAGS_KEEPALIVE | HTTP_CONNECTION_FLAGS_PIPELINING;
+    context->bricklink.http = httpOpen( &context->tcp, context->bricklink.apiaddress, blport, testflags );
+    context->bricklink.webhttp = httpOpen( &context->tcp, context->bricklink.webaddress, blport, testflags );
+    context->brickowl.http = httpOpen( &context->tcp, context->brickowl.apiaddress, boport, testflags );
+  }
+#else
   context->bricklink.http = httpOpen( &context->tcp, context->bricklink.apiaddress, 443, HTTP_CONNECTION_FLAGS_KEEPALIVE | HTTP_CONNECTION_FLAGS_PIPELINING | HTTP_CONNECTION_FLAGS_SSL );
   httpSetSSLHostName( context->bricklink.http, BS_BRICKLINK_API_SERVER );
   context->bricklink.webhttp = httpOpen( &context->tcp, context->bricklink.webaddress, 443, HTTP_CONNECTION_FLAGS_KEEPALIVE | HTTP_CONNECTION_FLAGS_PIPELINING | HTTP_CONNECTION_FLAGS_SSL );
   httpSetSSLHostName( context->bricklink.webhttp, BS_BRICKLINK_WEB_SERVER );
   context->brickowl.http = httpOpen( &context->tcp, context->brickowl.apiaddress, 443, HTTP_CONNECTION_FLAGS_KEEPALIVE | HTTP_CONNECTION_FLAGS_PIPELINING | HTTP_CONNECTION_FLAGS_SSL );
   httpSetSSLHostName( context->brickowl.http, BS_BRICKOWL_API_SERVER );
+#endif
   /* Increase BrickOwl timeout due to absurd times required to download inventory */
   httpSetTimeout( context->brickowl.http, 120*1000, 120*1000 );
   return;

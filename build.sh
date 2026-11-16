@@ -145,6 +145,12 @@ case "$target" in
 esac
 
 $CC $CFLAGS $SOURCES $res -o bricksync$exe $LIBS -DBS_VERSION_BUILDTIME="$stamp" $releaseflag
+# BS_TEST_BUILD=1: also build bricksync-test, which talks to the local fake stores of tests/
+# (plain HTTP on 127.0.0.1). It is a separate file: the real bricksync never has that code in it.
+if [ "${BS_TEST_BUILD:-0}" = "1" ]; then
+  $CC $CFLAGS -DBS_TEST_HOOKS $SOURCES $res -o bricksync-test$exe $LIBS -DBS_VERSION_BUILDTIME="$stamp" $releaseflag
+  echo "Built bricksync-test$exe"
+fi
 case "$target" in
   macos-*)
     # Strip, then sign ad hoc: Apple Silicon refuses to run a binary without a signature, and
