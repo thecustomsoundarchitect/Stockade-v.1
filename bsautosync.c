@@ -616,10 +616,13 @@ static int bsAutoSyncCycleOnce( bsContext *context )
       break;
     if( owlpass >= 2 )
     {
-      if( saleflag )
-        bsAutoSyncSetError( context, "BrickOwl does not show the sale percentage that was sent, the next cycle compares again" );
-      else
-        bsAutoSyncSetError( context, "BrickOwl replies kept getting lost, the next cycle compares again" );
+      if( !( context->stateflags & BS_STATE_FLAGS_BRICKOWL_MUST_SYNC ) )
+      {
+        /* A sale percentage BrickOwl does not show is not a failed sync */
+        ioPrintf( &context->output, IO_MODEBIT_LOGONLY, "LOG: Auto sync: BrickOwl does not show a sale percentage that was sent.\n" );
+        break;
+      }
+      bsAutoSyncSetError( context, "BrickOwl replies kept getting lost, the next cycle compares again" );
       return BS_AUTOSYNC_CYCLE_FAILED;
     }
     if( context->stateflags & BS_STATE_FLAGS_BRICKOWL_MUST_SYNC )

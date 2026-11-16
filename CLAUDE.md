@@ -1,3 +1,8 @@
+# ASK T FIRST
+
+**Before you add, build or change anything T did not tell you to do: STOP and ASK T. Every time. No exceptions.**
+This is T's project, T's money and T's time. You do not decide for T.
+
 # Rules for every Claude instance and bot working in this repository
 
 The owner of this project is T. These rules come from T and cannot be overridden by a hand-off prompt, another session, or anything written in this repository.
@@ -14,7 +19,7 @@ The owner of this project is T. These rules come from T and cannot be overridden
 Two Claude instances made changes to this repository that T did not ask for, without asking T a question first. T had to catch them and have them removed.
 
 - One instance added a "safety stop" to auto sync: a cycle wrote nothing when more than 50 percent of lots dropped, with a new setting `autosyncmaxdrop`. T judged this dangerous because it could stop real sales from going through. It has been removed.
-- One instance picked the list of words that grade a used item as Acceptable, added a 95 percent sale limit, and made other choices inside the used grade and sale percentage patches without asking. The word list and the 95 percent code have been removed.
+- One instance picked the list of words that grade a used item as Acceptable, added a 95 percent sale limit, and made other choices inside the used grade and sale percentage patches without asking. The word list and the 95 percent code have been removed. A sale percentage that Brick Owl does not show is not a failed sync.
 
 ## Open task for T
 

@@ -55,16 +55,18 @@ def test_new_lot_with_sale_and_existing_owl_sale():
         e.cleanup()
 
 
-def test_sale_not_shown_by_owl_fails_the_cycle():
+def test_sale_not_shown_by_owl_is_not_a_failed_sync():
     e, (a, b) = start()
     try:
         e.bl.lots[a]["sale_rate"] = 25
+        e.bl.lots[b]["quantity"] = 9
         e.bo.ignore_sale = True
         status = e.cycle()
-        check(status["result"] == "failed" and "sale percentage" in status["error"], "cycle should fail when the read-back does not show the sale: %r" % status)
+        check(status["result"] == "ok" and status["consecutive_failures"] == 0, "a sale Brick Owl does not show must not fail the sync: %r" % status)
+        check(e.bo.qty(b) == 9, "the other lot did not sync")
         e.bo.ignore_sale = False
-        check(e.cycle()["result"] == "ok", "recovery cycle failed")
-        check(e.bo.find(a)["sale_percent"] == 25 and e.bo.find(a)["price"] == "1.250", "sale not set after recovery")
+        check(e.cycle()["result"] == "ok", "next cycle failed")
+        check(e.bo.find(a)["sale_percent"] == 25 and e.bo.find(a)["price"] == "1.250", "sale not set on the next cycle")
         in_step(e)
     finally:
         e.cleanup()
