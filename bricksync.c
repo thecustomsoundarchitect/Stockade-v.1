@@ -282,6 +282,9 @@ bsContext *bsInit( char *statepath, int *retstateloaded )
   context->githubapihttp = 0;
   context->diskspacechecktime = 0;
   context->findordertime = 7 * (24*60*60);
+  context->autosyncflag = 0;
+  context->autosyncinterval = BS_AUTOSYNC_INTERVAL_DEFAULT;
+  context->autosyncmaxdrop = BS_AUTOSYNC_MAXDROP_DEFAULT;
 #if BS_ENABLE_MATHPUZZLE
   context->puzzleanswer.i = 8;
 #endif
@@ -1297,6 +1300,8 @@ int main( int argc, char **argv )
   /* Disallow negative quantities */
   bsxClampNegativeInventory( context->inventory );
 
+  bsAutoSyncInit( context );
+
   if( !( stateloaded ) )
   {
     ioPrintf( &context->output, 0, "\n" );
@@ -1429,8 +1434,12 @@ int main( int argc, char **argv )
     if( context->curtime >= context->diskspacechecktime )
       bsDiskFreeSpaceCheck( context );
 
+    /* Auto sync: BrickLink is the master. One cycle does the order checks, the live reads and the
+       BrickOwl update; the saved copy is never pushed onto BrickLink, queued writes are never replayed */
+    if( ( context->autosyncflag ) && !( context->stateflags & BS_STATE_FLAGS_BRICKLINK_MASTER_MODE ) )
+      bsAutoSyncTick( context );
     /* Pretty much all operations are disabled when the master mode is running */
-    if( !( context->stateflags & BS_STATE_FLAGS_BRICKLINK_MASTER_MODE ) )
+    else if( !( context->stateflags & BS_STATE_FLAGS_BRICKLINK_MASTER_MODE ) )
     {
       /* Autocheck mode, timer based order checking */
       if( context->contextflags & BS_CONTEXT_FLAGS_AUTOCHECK_MODE )

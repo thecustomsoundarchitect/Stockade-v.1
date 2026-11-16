@@ -155,6 +155,16 @@ static int bsCheckBrickLinkOrder( bsContext *context, bsOrder *order, bsxInvento
 
     /* Subtract the content of the order from inventory, queue update to BrickOwl */
     bsxInvertQuantities( modinv );
+    if( context->autosyncflag )
+    {
+      /* BrickLink changed these lots itself: keep the pending BrickOwl deductions' base in step */
+      bsAutoSyncLedgerBrickLinkOrder( context, modinv );
+      if( !( bsAutoSyncLedgerSave( context, &journal ) ) )
+      {
+        bsFatalError( context );
+        return 0;
+      }
+    }
     bsMergeInv( context, modinv, &stats, BS_MERGE_FLAGS_UPDATE_BRICKOWL );
     context->stateflags |= BS_STATE_FLAGS_BRICKOWL_MUST_UPDATE;
     /* Update state, with fsync() and journaling */
@@ -357,7 +367,18 @@ static int bsCheckBrickOwlOrder( bsContext *context, bsOrder *order, bsxInventor
   /* Subtract the content of the order from inventory, queue update to BrickLink */
   bsxInvertQuantities( inv );
   bsMergeInv( context, inv, &stats, BS_MERGE_FLAGS_UPDATE_BRICKLINK );
-  context->stateflags |= BS_STATE_FLAGS_BRICKLINK_MUST_UPDATE;
+  if( context->autosyncflag )
+  {
+    /* The deductions owed to BrickLink go to the ledger file, saved together with the order file:
+       each is sent once and checked against the live BrickLink quantity (bsautosync.c) */
+    if( !( bsAutoSyncLedgerAddOrder( context, order->id, &journal ) ) )
+    {
+      bsFatalError( context );
+      return 0;
+    }
+  }
+  else
+    context->stateflags |= BS_STATE_FLAGS_BRICKLINK_MUST_UPDATE;
   /* Update state, with fsync() and journaling */
   if( !( bsSaveState( context, &journal ) ) )
   {

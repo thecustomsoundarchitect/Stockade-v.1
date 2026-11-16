@@ -449,6 +449,24 @@ static int bsConfParse( bsContext *context, bsConfParser *parser )
           goto error;
         }
       }
+      else if( ccStrMatchSeq( "autosync", tokenstring, token->length ) )
+      {
+        if( !( bsConfReadInteger( context, parser, &readint ) ) )
+          goto error;
+        context->autosyncflag = ( readint ? 1 : 0 );
+      }
+      else if( ccStrMatchSeq( "autosyncinterval", tokenstring, token->length ) )
+      {
+        if( !( bsConfReadInteger( context, parser, &readint ) ) )
+          goto error;
+        context->autosyncinterval = (int)readint;
+      }
+      else if( ccStrMatchSeq( "autosyncmaxdrop", tokenstring, token->length ) )
+      {
+        if( !( bsConfReadInteger( context, parser, &readint ) ) )
+          goto error;
+        context->autosyncmaxdrop = (int)readint;
+      }
       else if( ccStrMatchSeq( "retainemptylots", tokenstring, token->length ) )
       {
         if( !( bsConfReadInteger( context, parser, &readint ) ) )

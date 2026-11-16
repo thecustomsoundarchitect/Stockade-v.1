@@ -392,6 +392,31 @@ static void bsBrickLinkApplyDiffUpdate( bsContext *context, bsxItem *item, int i
 }
 
 
+/* Send one BrickLink update or delete (per the item's flags) and wait for its reply.
+   The caller owns the item; nothing is retried here, the result code is returned as is. */
+int bsBrickLinkApplySingle( bsContext *context, bsxItem *item )
+{
+  int result;
+  bsQueryReply *reply, *replynext;
+
+  DEBUG_SET_TRACKER();
+
+  if( item->flags & BSX_ITEM_XFLAGS_TO_DELETE )
+    bsBrickLinkApplyDiffDelete( context, item, 0 );
+  else
+    bsBrickLinkApplyDiffUpdate( context, item, 0 );
+  bsWaitBrickLinkQueries( context, 0 );
+  result = HTTP_RESULT_NOREPLY_ERROR;
+  for( reply = context->replylist.first ; reply ; reply = replynext )
+  {
+    replynext = reply->list.next;
+    result = reply->result;
+    bsFreeReply( context, reply );
+  }
+  return result;
+}
+
+
 /* Queue a batch of update queries for lots of the "diff" inventory */
 static int bsQueueBrickLinkApplyDiff( bsContext *context, bsWorkList *worklist, bsxInventory *diffinv )
 {
