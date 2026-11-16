@@ -141,6 +141,71 @@ def test_owl_sale_sells_out_lot():
         e.cleanup()
 
 
+def test_bricklink_sales_sell_out_every_lot():
+    e, (a, b) = start()
+    try:
+        remaining_bl = dict(e.bl.lots[a])
+        remaining_owl = dict(e.bo.find(a))
+        e.bl.sale({b: 5})
+        check(e.cycle()["result"] == "ok", "first lot sellout failed: " + e.status()["error"])
+        check(e.bl.qty(b) is None and e.bo.find(b) is None, "the sold out lot remains for sale")
+        check(e.bl.lots[a] == remaining_bl and e.bo.find(a) == remaining_owl, "selling out one lot changed the other lot")
+        in_step(e)
+
+        e.bl.sale({a: 10})
+        status = e.cycle()
+        check(status["result"] == "ok" and status["lots"] == 0, "last lot sellout failed: %r" % status)
+        check(e.bl.lots == {} and e.bo.active_count() == 0, "the stores are not both sold out")
+        check(e.bl.server.writes() == [], "BrickLink orders caused BrickLink writes")
+        writes = e.bo.server.writes()
+        check(len(writes) == 2 and all(w[1] == "/v1/inventory/update" and "absolute_quantity=0" in w[3] for w in writes), "expected one Brick Owl removal per lot: %r" % writes)
+        for _ in range(2):
+            check(e.cycle()["result"] == "ok", "empty cycle after BrickLink sellout failed")
+            in_step(e)
+        e.stop()
+        e.start()
+        check(e.status()["result"] == "ok" and e.status()["lots"] == 0, "restart after BrickLink sellout failed")
+        check(e.cycle()["result"] == "ok", "cycle after sold out restart failed")
+        check(e.bl.lots == {} and e.bo.active_count() == 0, "sold out stock returned after restart")
+        check(e.bl.server.writes() == [], "BrickLink was written after sellout")
+        check(e.bo.server.writes() == writes, "sold out lots were written again")
+    finally:
+        e.cleanup()
+
+
+def test_owl_sales_sell_out_every_lot_once():
+    e, (a, b) = start()
+    try:
+        remaining_bl = dict(e.bl.lots[a])
+        remaining_owl = dict(e.bo.find(a))
+        e.bo.sale({b: 5})
+        check(e.cycle()["result"] == "ok", "first lot sellout failed: " + e.status()["error"])
+        check(e.bl.qty(b) is None and e.bo.find(b) is None, "the sold out lot remains for sale")
+        check(e.bl.lots[a] == remaining_bl and e.bo.find(a) == remaining_owl, "selling out one lot changed the other lot")
+        expected = [("DELETE", "/api/store/v1/inventories/%d" % b, "ok")]
+        check(bl_quantity_writes(e) == expected, "the first sold out lot was not deducted once: %r" % bl_quantity_writes(e))
+        in_step(e)
+
+        e.bo.sale({a: 10})
+        status = e.cycle()
+        check(status["result"] == "ok" and status["lots"] == 0 and status["pending_bricklink_deductions"] == 0, "last lot sellout failed: %r" % status)
+        check(e.bl.lots == {} and e.bo.active_count() == 0, "the stores are not both sold out")
+        expected.append(("DELETE", "/api/store/v1/inventories/%d" % a, "ok"))
+        check(bl_quantity_writes(e) == expected, "the sold out lots were not deducted once: %r" % bl_quantity_writes(e))
+        for _ in range(2):
+            check(e.cycle()["result"] == "ok", "empty cycle after Brick Owl sellout failed")
+            in_step(e)
+        e.stop()
+        e.start()
+        check(e.status()["result"] == "ok" and e.status()["lots"] == 0, "restart after Brick Owl sellout failed")
+        check(e.cycle()["result"] == "ok", "cycle after sold out restart failed")
+        check(e.bl.lots == {} and e.bo.active_count() == 0, "sold out stock returned after restart")
+        check(bl_quantity_writes(e) == expected, "a sold out lot was deducted again: %r" % bl_quantity_writes(e))
+        check(e.bo.server.writes() == [], "Brick Owl was written after its own sellout")
+    finally:
+        e.cleanup()
+
+
 def test_sales_on_both_stores_same_cycle():
     e, (a, b) = start()
     try:
@@ -214,19 +279,22 @@ def test_bricklink_read_fails_nothing_written():
         e.cleanup()
 
 
-def test_bricklink_empty_read_nothing_written():
+def test_bricklink_empty_inventory_removes_owl_lots_and_restores():
     e, (a, b) = start()
     try:
         with e.bl.lock:
             saved = dict(e.bl.lots)
             e.bl.lots.clear()
         status = e.cycle()
-        check(status["result"] == "failed", "cycle should have failed on an empty BrickLink inventory")
-        check(e.bl.server.writes() == [] and e.bo.server.writes() == [], "writes after an empty BrickLink read")
-        check(e.bo.active_count() == 2, "Brick Owl lots were removed")
+        check(status["result"] == "ok" and status["lots"] == 0, "empty BrickLink inventory did not sync: %r" % status)
+        check(e.bl.lots == {} and e.bo.active_count() == 0, "Brick Owl still holds lots after BrickLink became empty")
+        check(e.bl.server.writes() == [], "empty inventory sync wrote to BrickLink")
+        in_step(e)
         with e.bl.lock:
             e.bl.lots.update(saved)
         check(e.cycle()["result"] == "ok", "recovery cycle failed")
+        check(e.bl.lots == saved, "restoring the inventory changed BrickLink")
+        check(e.bl.server.writes() == [], "inventory restoration wrote to BrickLink")
         in_step(e)
     finally:
         e.cleanup()

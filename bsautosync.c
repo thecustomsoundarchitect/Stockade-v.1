@@ -7,7 +7,7 @@
  *
  * One cycle, every autosyncinterval seconds:
  *  1. Check both stores for orders (order files on disk make each order count once).
- *  2. Read the live BrickLink inventory. A failed or empty read stops the cycle, nothing is written.
+ *  2. Read the live BrickLink inventory. A failed read stops the cycle, nothing is written.
  *  3. Send the BrickOwl sales still owed to BrickLink, from the ledger file. Each one is recorded
  *     as "sent" before it leaves and is checked against the live BrickLink quantity afterwards,
  *     so a sale is deducted once even if a reply is lost or BrickSync is killed.
@@ -659,12 +659,6 @@ static int bsAutoSyncCycleOnce( bsContext *context )
     ioPrintf( &context->output, 0, BSMSG_INFO "Auto sync: a BrickLink order arrived during the inventory read, starting the cycle over.\n" );
     bsxFreeInventory( inv );
     return BS_AUTOSYNC_CYCLE_RESTART;
-  }
-  if( !( bsAutoSyncActiveLots( inv ) ) )
-  {
-    bsxFreeInventory( inv );
-    bsAutoSyncSetError( context, "BrickLink returned an empty inventory (is the store closed?), nothing was written" );
-    return BS_AUTOSYNC_CYCLE_FAILED;
   }
   bsInventoryFilterOutItems( context, inv );
   bsAutoSyncFilterOwlIgnored( context, inv );
