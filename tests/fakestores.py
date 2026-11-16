@@ -205,6 +205,8 @@ class FakeBrickOwl:
         self.lots, self.orders = {}, {}
         self.nextlot, self.nextorder = 9000001, 8000001
         self.on_inventory_read = None
+        # Brick Owl catalogue: BrickLink item number -> (Brick Owl type, BOID)
+        self.catalog = {k: ("Part", v) for k, v in BOIDS.items()}
         self.server = Server("brickowl", self.handle)
         self.lock = self.server.lock
 
@@ -233,7 +235,7 @@ class FakeBrickOwl:
             for bl_lotid, q in items.items():
                 lot = self.find(bl_lotid)
                 lot["qty"] -= q
-                lines.append(dict(condition=("New" if lot["full_con"] == "new" else "Used"), name="Item", boid=lot["boid"],
+                lines.append(dict(condition=("New" if lot["full_con"].startswith("new") else "Used"), name="Item", boid=lot["boid"],
                                   personal_note=lot["personal_note"], bl_lot_id=lot["external_id"],
                                   external_lot_ids={"other": lot["external_id"]}, remaining_quantity=str(lot["qty"]),
                                   public_note=lot["public_note"], ordered_quantity=str(q), base_price=lot["price"],
@@ -259,14 +261,16 @@ class FakeBrickOwl:
         if path == "/v1/order/items":
             return 200, json.dumps(self.orders[int(query["order_id"][0])]["lines"])
         if path == "/v1/catalog/id_lookup":
-            boid = BOIDS.get(query["id"][0])
+            kind, boid = self.catalog.get(query["id"][0], (None, None))
+            if kind != query.get("type", [kind])[0]:
+                boid = None
             return 200, json.dumps({"boids": [str(boid)] if boid else []})
         if path == "/v1/inventory/list":
             out = []
             for l in self.lots.values():
                 if l["qty"] <= 0:
                     continue
-                out.append(dict(con=("new" if l["full_con"] == "new" else "used"), full_con=l["full_con"], qty=str(l["qty"]),
+                out.append(dict(con=("new" if l["full_con"].startswith("new") else "used"), full_con=l["full_con"], qty=str(l["qty"]),
                                 lot_id=str(l["lot_id"]), price=l["price"], base_price=l["price"], url="http://x/store/item", public_note=l["public_note"],
                                 personal_note=l["personal_note"], sale_percent=str(l["sale_percent"]), bulk_qty="1", for_sale="1",
                                 boid=l["boid"], external_lot_ids=({"other": l["external_id"]} if l["external_id"] else {}), type="Part"))

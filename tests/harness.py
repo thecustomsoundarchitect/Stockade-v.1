@@ -12,7 +12,6 @@ bricklink.tokensecret = "ts0000";
 brickowl.key = "bokey0000";
 checkmessage = 0;
 autosync = 1;
-autosyncinterval = %d;
 '''
 
 
@@ -22,7 +21,7 @@ class Env:
         self.dir = tempfile.mkdtemp(prefix="bstest-")
         os.makedirs(os.path.join(self.dir, "data"))
         with open(os.path.join(self.dir, "data", "bricksync.conf.txt"), "w") as f:
-            f.write(CONF % interval)
+            f.write(CONF + ("autosyncinterval = %d;\n" % interval if interval else ""))
         self.proc, self.out = None, None
 
     def path(self, *parts):

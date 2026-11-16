@@ -255,6 +255,66 @@ def test_mass_drop_guard():
         e.cleanup()
 
 
+def test_large_batch_of_new_lots_uploaded_at_once():
+    e, (a, b) = start()
+    try:
+        new = []
+        with e.bl.lock:
+            for i in range(400):
+                no = "b%04d" % i
+                e.bo.catalog[no] = ("Part", 200000 + i)
+                new.append(e.bl.add_lot(no, 1 + i % 50, 0.05 + i * 0.01, cond=("U" if i % 3 == 0 else "N")))
+        check(e.cycle()["result"] == "ok", "cycle failed: " + e.status()["error"])
+        in_step(e)
+        creates = [w for w in e.bo.server.writes() if w[1] == "/v1/inventory/create"]
+        check(len(creates) == 400, "expected 400 Brick Owl creates, found %d" % len(creates))
+        check(len(e.bo.server.writes()) == 400, "extra Brick Owl writes: %d" % len(e.bo.server.writes()))
+        check(e.bl.server.writes() == [], "wrote to BrickLink: %r" % e.bl.server.writes()[:3])
+        for i, lotid in enumerate(new):
+            owl = e.bo.find(lotid)
+            check((owl["full_con"] == "new") == (i % 3 != 0), "lot %d: wrong condition %r" % (lotid, owl["full_con"]))
+        # Nothing is created twice afterwards
+        e.bo.server.clear_log()
+        check(e.cycle()["result"] == "ok", "second cycle failed")
+        check(e.bo.server.writes() == [], "second cycle wrote to Brick Owl: %r" % e.bo.server.writes()[:3])
+        in_step(e)
+    finally:
+        e.cleanup()
+
+
+def test_new_lots_of_each_item_type():
+    e, (a, b) = start()
+    try:
+        kinds = (("PART", "Part", 11), ("MINIFIG", "Minifigure", 0), ("SET", "Set", 0), ("GEAR", "Gear", 0),
+                 ("INSTRUCTION", "Instructions", 0), ("ORIGINAL_BOX", "Packaging", 0))
+        new = {}
+        with e.bl.lock:
+            for i, (bltype, owltype, color) in enumerate(kinds):
+                no = "t%d-1" % i
+                e.bo.catalog[no] = (owltype, 300000 + i)
+                new[bltype] = e.bl.add_lot(no, 3 + i, 2.0 + i, color=color, itemtype=bltype)
+        check(e.cycle()["result"] == "ok", "cycle failed: " + e.status()["error"])
+        for bltype, lotid in new.items():
+            check(e.bo.qty(lotid) == e.bl.qty(lotid), "%s lot did not arrive on Brick Owl: %r" % (bltype, e.bo.qty(lotid)))
+        in_step(e)
+        check(e.bl.server.writes() == [], "wrote to BrickLink: %r" % e.bl.server.writes())
+        e.bo.server.clear_log()
+        check(e.cycle()["result"] == "ok", "second cycle failed")
+        check(e.bo.server.writes() == [], "second cycle wrote to Brick Owl: %r" % e.bo.server.writes())
+    finally:
+        e.cleanup()
+
+
+def test_default_interval_is_five_minutes():
+    e, (a, b) = start(interval=None)
+    try:
+        check("a cycle runs every 300 seconds" in __import__("re").sub("\x1b\\[[0-9;]*m", "", e.output()), "default interval is not 300 seconds:\n" + e.output()[:2000])
+        status = e.status()
+        check(295 <= status["next_cycle_time"] - status["time"] <= 305, "next cycle is not 5 minutes away: %r" % status)
+    finally:
+        e.cleanup()
+
+
 def test_owl_write_fails_then_recovers():
     e, (a, b) = start()
     try:
@@ -428,8 +488,7 @@ def test_timer_runs_without_any_command():
         e.cleanup()
 
 
-if __name__ == "__main__":
-    tests = {k: v for k, v in sorted(globals().items()) if k.startswith("test_")}
+def main(tests):
     names = sys.argv[1:] or list(tests)
 
     def run(name):
@@ -449,3 +508,7 @@ if __name__ == "__main__":
                 print(error, flush=True)
     print("\n%d passed, %d failed" % (len(names) - failed, failed))
     sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main({k: v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)})
