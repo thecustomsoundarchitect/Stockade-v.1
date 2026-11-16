@@ -64,6 +64,7 @@
 
 #include "bricksync.h"
 #include "bsstop.h"
+#include "bsevalgrade.h"
 
 
 ////
@@ -461,6 +462,25 @@ static void bsAutoSyncCarryOver( bsContext *context, bsxInventory *inv, bsxInven
 }
 
 
+/* Used grades: a used item is Good, or Acceptable when its public note clearly describes a condition
+   problem. New items and sets are left alone. The BrickOwl comparison then creates lots with this grade
+   and corrects the grade of the lots BrickOwl already holds. */
+static void bsAutoSyncSetUsedGrades( bsxInventory *inv )
+{
+  int itemindex;
+  bsxItem *item;
+
+  for( itemindex = 0 ; itemindex < inv->itemcount ; itemindex++ )
+  {
+    item = &inv->itemlist[itemindex];
+    if( ( item->flags & BSX_ITEM_FLAGS_DELETED ) || ( item->condition != 'U' ) || ( item->typeid == 'S' ) )
+      continue;
+    item->usedgrade = ( bsNoteDescribesDefect( item->comments ) ? 'A' : 'G' );
+  }
+  return;
+}
+
+
 static int bsAutoSyncCycleOnce( bsContext *context )
 {
   int oldlots, newlots, pendingcount, owllots, owldrops, owlpass;
@@ -531,6 +551,7 @@ static int bsAutoSyncCycleOnce( bsContext *context )
 
   /* 4. The live BrickLink inventory becomes the saved copy */
   bsAutoSyncCarryOver( context, inv, context->inventory );
+  bsAutoSyncSetUsedGrades( inv );
   if( !( bsQueryBrickOwlLookupBoids( context, inv, BS_RESOLVE_FLAGS_TRYFALLBACK, 0 ) ) )
   {
     bsxFreeInventory( inv );

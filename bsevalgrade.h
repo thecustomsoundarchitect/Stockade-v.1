@@ -23,6 +23,10 @@
 
 int bsEvalulatePartCondition( char *comments );
 
+/* Stockade grading rule: 1 if the public note clearly describes a condition problem, 0 if blank or harmless */
+int bsNoteDescribesDefect( const char *comments );
+
+
 enum
 {
   BS_EVAL_CONDITION_LIKE_NEW,
