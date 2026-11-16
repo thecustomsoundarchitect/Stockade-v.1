@@ -462,6 +462,27 @@ static void bsAutoSyncCarryOver( bsContext *context, bsxInventory *inv, bsxInven
 }
 
 
+/* 1 if this BrickOwl update sets or clears a sale percentage, or creates a lot that needs one
+   (BrickOwl takes no sale percentage on creation, it is set by the next comparison) */
+static int bsAutoSyncDiffTouchesSale( bsxInventory *diffinv )
+{
+  int itemindex;
+  bsxItem *item;
+
+  for( itemindex = 0 ; itemindex < diffinv->itemcount ; itemindex++ )
+  {
+    item = &diffinv->itemlist[itemindex];
+    if( item->flags & BSX_ITEM_FLAGS_DELETED )
+      continue;
+    if( ( item->flags & BSX_ITEM_XFLAGS_TO_UPDATE ) && ( item->flags & BSX_ITEM_XFLAGS_UPDATE_SALE ) )
+      return 1;
+    if( ( item->flags & BSX_ITEM_XFLAGS_TO_CREATE ) && ( item->sale > 0 ) && ( item->sale <= BS_BRICKOWL_SALE_MAX ) )
+      return 1;
+  }
+  return 0;
+}
+
+
 /* Used grades: a used item is Good, or Acceptable when its public note clearly describes a condition
    problem. New items and sets are left alone. The BrickOwl comparison then creates lots with this grade
    and corrects the grade of the lots BrickOwl already holds. */
@@ -483,7 +504,7 @@ static void bsAutoSyncSetUsedGrades( bsxInventory *inv )
 
 static int bsAutoSyncCycleOnce( bsContext *context )
 {
-  int oldlots, newlots, pendingcount, owllots, owldrops, owlpass;
+  int oldlots, newlots, pendingcount, owllots, owldrops, owlpass, saleflag;
   int64_t ordertopdate;
   bsxInventory *inv;
   bsOrderList orderlist;
@@ -599,6 +620,7 @@ static int bsAutoSyncCycleOnce( bsContext *context )
       bsAutoSyncSetError( context, "the update would remove %d of %d BrickOwl lots, over %d percent. BrickOwl was not updated", owldrops, owllots, context->autosyncmaxdrop );
       return BS_AUTOSYNC_CYCLE_FAILED;
     }
+    saleflag = bsAutoSyncDiffTouchesSale( context->brickowl.diffinv );
     if( !( bsQueryBrickOwlApplyDiff( context, context->brickowl.diffinv, 0 ) ) )
     {
       bsxEmptyInventory( context->brickowl.diffinv );
@@ -606,14 +628,20 @@ static int bsAutoSyncCycleOnce( bsContext *context )
       return BS_AUTOSYNC_CYCLE_FAILED;
     }
     bsxEmptyInventory( context->brickowl.diffinv );
-    if( !( context->stateflags & BS_STATE_FLAGS_BRICKOWL_MUST_SYNC ) )
+    if( !( context->stateflags & BS_STATE_FLAGS_BRICKOWL_MUST_SYNC ) && !( saleflag ) )
       break;
     if( owlpass >= 2 )
     {
-      bsAutoSyncSetError( context, "BrickOwl replies kept getting lost, the next cycle compares again" );
+      if( saleflag )
+        bsAutoSyncSetError( context, "BrickOwl does not show the sale percentage that was sent, the next cycle compares again" );
+      else
+        bsAutoSyncSetError( context, "BrickOwl replies kept getting lost, the next cycle compares again" );
       return BS_AUTOSYNC_CYCLE_FAILED;
     }
-    ioPrintf( &context->output, 0, BSMSG_INFO "Auto sync: a BrickOwl reply was lost, reading BrickOwl again to confirm.\n" );
+    if( context->stateflags & BS_STATE_FLAGS_BRICKOWL_MUST_SYNC )
+      ioPrintf( &context->output, 0, BSMSG_INFO "Auto sync: a BrickOwl reply was lost, reading BrickOwl again to confirm.\n" );
+    else
+      ioPrintf( &context->output, 0, BSMSG_INFO "Auto sync: a sale percentage was sent, reading BrickOwl back to confirm it.\n" );
   }
   context->brickowl.lastsynctime = time( 0 );
 

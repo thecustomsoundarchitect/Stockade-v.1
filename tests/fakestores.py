@@ -206,6 +206,8 @@ class FakeBrickOwl:
         self.nextlot, self.nextorder = 9000001, 8000001
         self.on_inventory_read = None
         # Brick Owl catalogue: BrickLink item number -> (Brick Owl type, BOID)
+        # True: accept sale_percent but do not apply it (to test the read-back)
+        self.ignore_sale = False
         self.catalog = {k: ("Part", v) for k, v in BOIDS.items()}
         self.server = Server("brickowl", self.handle)
         self.lock = self.server.lock
@@ -306,7 +308,9 @@ class FakeBrickOwl:
                     lot[key] = form[key]
             if "condition" in form:
                 lot["full_con"] = form["condition"]
-            if "sale_percent" in form:
+            if "sale_percent" in form and not (-95 <= int(form["sale_percent"]) <= 95):
+                return 400, json.dumps(dict(error=dict(status="Invalid sale percent")))
+            if "sale_percent" in form and not self.ignore_sale:
                 lot["sale_percent"] = int(form["sale_percent"])
             return 200, json.dumps(dict(status="success"))
         return 404, json.dumps(dict(error="unhandled " + path))

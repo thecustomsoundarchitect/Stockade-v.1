@@ -577,6 +577,8 @@ typedef struct
 #define BS_AUTOSYNC_MAXDROP_DEFAULT (50)
 #define BS_AUTOSYNC_GUARD_MINLOTS (20)
 #define BS_AUTOSYNC_ALERT_FAILCOUNT (4)
+/* BrickOwl accepts sale_percent as a whole number up to 95 */
+#define BS_BRICKOWL_SALE_MAX (95)
 
 void bsAutoSyncInit( bsContext *context );
 /* Run one cycle if one is due. Called by the main loop instead of the check/update/sync steps */

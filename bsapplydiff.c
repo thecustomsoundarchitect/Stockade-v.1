@@ -874,6 +874,8 @@ static void bsBrickOwlApplyDiffUpdate( bsContext *context, bsxItem *item, int it
     ccGrowthPrintf( &postgrowth, "&bulk_qty=%d", ( item->bulk > 0 ? item->bulk : 1 ) );
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_MYCOST )
     ccGrowthPrintf( &postgrowth, "&my_cost=%.3f", item->mycost );
+  if( item->flags & BSX_ITEM_XFLAGS_UPDATE_SALE )
+    ccGrowthPrintf( &postgrowth, "&sale_percent=%d", item->sale );
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_USEDGRADE )
   {
     conditionstring = 0;
@@ -924,6 +926,8 @@ static void bsBrickOwlApplyDiffUpdate( bsContext *context, bsxItem *item, int it
     ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "; Set mycost to %.3f", item->mycost );
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_USEDGRADE )
     ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "; Set usedgrade to %c", item->usedgrade );
+  if( item->flags & BSX_ITEM_XFLAGS_UPDATE_SALE )
+    ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "; Set sale to %d percent", item->sale );
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_TIERPRICES )
     ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "; Set tierprices to [[%d,%.3f],[%d,%.3f],[%d,%.3f]]", item->tq1, item->tp1, item->tq2, item->tp2, item->tq3, item->tp3 );
   ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "\n" );
