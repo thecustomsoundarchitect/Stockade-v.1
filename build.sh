@@ -111,8 +111,8 @@ case "$target" in
     ;;
   win*)
     exe=".exe"
-    # Static OpenSSL; crypt32 serves the Windows certificate store
-    LIBS="-static -lssl -lcrypto -lws2_32 -lwsock32 -lcrypt32 -luser32 -ladvapi32 -lgdi32 -lm"
+    # Static OpenSSL; crypt32 serves the Windows certificate store, bcrypt its random numbers
+    LIBS="-static -lssl -lcrypto -lws2_32 -lwsock32 -lcrypt32 -lbcrypt -luser32 -ladvapi32 -lgdi32 -lm"
     ;;
   macos-*)
     ossl="${OPENSSL_DIR:-}"
