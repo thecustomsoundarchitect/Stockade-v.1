@@ -478,6 +478,54 @@ def test_bricklink_deduction_rejected():
     _owl_sale_with_bricklink_failure("500", ["500", "ok"])
 
 
+def test_short_bricklink_stock_keeps_unresolved_remainder():
+    e, (a, b) = start()
+    try:
+        e.stop()
+        with e.bl.lock:
+            e.bl.lots[a]["quantity"] = 2
+        with open(e.path("data", "bricksync.blpending.txt"), "w") as f:
+            f.write("BSLEDGER 1\n8000001 %d 5 0 0\n" % a)
+        e.proc, e.out = None, None
+        e.start()
+        status = e.status()
+        check(status["result"] == "failed", "the unresolved remainder was not reported")
+        check(status["pending_bricklink_deductions"] == 1, "the remainder was forgotten: %r" % status)
+        check(e.bl.qty(a) is None, "the available BrickLink stock was not deducted")
+        with open(e.path("data", "bricksync.blpending.txt")) as f:
+            ledger = f.read().splitlines()
+        check(ledger == ["BSLEDGER 1", "8000001 %d 3 0 0" % a], "unexpected pending sale record: %r" % ledger)
+        e.bl.server.clear_log()
+        check(e.cycle()["result"] == "failed", "the missing amount should remain unresolved")
+        check(e.status()["pending_bricklink_deductions"] == 1, "the missing amount disappeared on the next cycle")
+        check(e.bl.server.writes() == [], "BrickLink was written again: %r" % e.bl.server.writes())
+    finally:
+        e.cleanup()
+
+
+def test_damaged_pending_file_is_preserved_and_sync_continues():
+    e = Env()
+    a = e.bl.add_lot("3001", 10, 1.25)
+    damaged = "this is not a pending sale file\n"
+    with open(e.path("data", "bricksync.blpending.txt"), "w") as f:
+        f.write(damaged)
+    try:
+        e.start()
+        check(e.status()["result"] == "ok", "startup did not continue: " + e.output()[-2000:])
+        preserved = sorted(name for name in os.listdir(e.path("data")) if name.startswith("bricksync.blpending.damaged"))
+        check(len(preserved) == 1, "damaged file was not preserved: %r" % preserved)
+        with open(e.path("data", preserved[0])) as f:
+            check(f.read() == damaged, "the preserved damaged file changed")
+        with open(e.path("data", "bricksync.blpending.txt")) as f:
+            check(f.read() == "BSLEDGER 1\n", "a clean active pending file was not created")
+        with e.bl.lock:
+            e.bl.lots[a]["quantity"] = 12
+        check(e.cycle()["result"] == "ok", "unrelated syncing stopped")
+        check(e.bo.qty(a) == 12, "unrelated stock did not sync")
+    finally:
+        e.cleanup()
+
+
 def test_bricklink_deduction_reply_lost_then_bricklink_sale():
     e, (a, b) = start()
     try:
