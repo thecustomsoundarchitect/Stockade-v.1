@@ -452,10 +452,6 @@ typedef struct
   int autosyncalertsent;
   struct bsAutoSyncLedger *autosyncledger;
   char autosyncerror[512];
-#if defined(__APPLE__)
-  int dailybackupcycle;
-  char dailybackuppruneday[11];
-#endif
 
 } bsContext;
 
@@ -666,10 +662,6 @@ int bsBrickOwlSaveOrder( bsContext *context, bsOrder *order, bsxInventory *inv, 
 char *bsInventoryBackupPath( bsContext *context, int tempflag );
 /* Store backup */
 int bsStoreBackup( bsContext *context, journalDef *journal );
-#if defined(__APPLE__)
-/* Check daily backups once after each completed auto sync cycle has been saved. */
-void bsDailyBackupTick( bsContext *context );
-#endif
 
 /* Store error path, returned string must be free()'d */
 char *bsErrorStoragePath( bsContext *context, int tempflag );

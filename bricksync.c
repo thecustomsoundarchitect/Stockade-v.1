@@ -284,10 +284,6 @@ bsContext *bsInit( char *statepath, int *retstateloaded )
   context->findordertime = 7 * (24*60*60);
   context->autosyncflag = 0;
   context->autosyncinterval = BS_AUTOSYNC_INTERVAL_DEFAULT;
-#if defined(__APPLE__)
-  context->dailybackupcycle = 0;
-  context->dailybackuppruneday[0] = 0;
-#endif
 #if BS_ENABLE_MATHPUZZLE
   context->puzzleanswer.i = 8;
 #endif
@@ -775,11 +771,6 @@ int bsStoreBackup( bsContext *context, journalDef *journal )
   char *backupoldpath, *backupnewpath;
 
   DEBUG_SET_TRACKER();
-
-#if defined(__APPLE__)
-  if( context->autosyncflag && journal && !( context->stateflags & BS_STATE_FLAGS_BRICKLINK_MASTER_MODE ) )
-    return 1;
-#endif
 
   backupoldpath = bsInventoryBackupPath( context, 1 );
   backupnewpath = bsInventoryBackupPath( context, 0 );
@@ -1402,10 +1393,6 @@ int main( int argc, char **argv )
         return 0;
       }
     }
-
-#if defined(__APPLE__)
-    bsDailyBackupTick( context );
-#endif
 
     /* Flush buffered I/O on log file */
     ioLogFlush( &context->output );
