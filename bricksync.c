@@ -282,7 +282,7 @@ bsContext *bsInit( char *statepath, int *retstateloaded )
   context->githubapihttp = 0;
   context->diskspacechecktime = 0;
   context->findordertime = 7 * (24*60*60);
-  context->autosyncflag = 0;
+  context->autosyncflag = 1;
   context->autosyncinterval = BS_AUTOSYNC_INTERVAL_DEFAULT;
 #if BS_ENABLE_MATHPUZZLE
   context->puzzleanswer.i = 8;
@@ -300,8 +300,7 @@ bsContext *bsInit( char *statepath, int *retstateloaded )
     ioPrintf( &context->output, 0, BSMSG_ERROR "Failed to read configuration file at \"" IO_RED "%s" CC_DIR_SEPARATOR_STRING "%s" IO_WHITE "\".\n", context->cwd, BS_CONFIGURATION_FILE );
     goto error;
   }
-  if( context->autosyncflag )
-    context->retainemptylotsflag = 0;
+  context->retainemptylotsflag = 0;
 
   /* Ensure reasonable values */
   if( context->bricklink.pollinterval < BS_POLL_SUCCESS_INTERVAL_MIN )

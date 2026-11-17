@@ -4,9 +4,9 @@ and checks the final stock on both stores and the exact write calls that were ma
 Run:  python3 tests/test_autosync.py            (all tests)
       python3 tests/test_autosync.py NAME ...   (some tests)
 """
-import json, os, sys, time, traceback
+import json, os, re, subprocess, sys, time, traceback
 from concurrent.futures import ThreadPoolExecutor
-from harness import Env
+from harness import BINARY, Env
 
 
 def check(cond, message):
@@ -413,6 +413,21 @@ def test_default_interval_is_five_minutes():
         e.cleanup()
 
 
+def test_old_autosync_off_setting_is_ignored():
+    e = Env(interval=None)
+    a = e.bl.add_lot("3001", 10, 1.25)
+    with open(e.path("data", "bricksync.conf.txt"), "a") as f:
+        f.write("autosync = 0;\n")
+    try:
+        e.start()
+        check(e.status()["result"] == "ok", "the old off setting stopped automatic syncing")
+        check(e.bo.qty(a) == 10, "the first automatic sync did not run")
+        plain = re.sub("\x1b\\[[0-9;]*m", "", e.output())
+        check("Auto sync is on" in plain, "automatic syncing did not start: " + plain[-2000:])
+    finally:
+        e.cleanup()
+
+
 def test_owl_write_fails_then_recovers():
     e, (a, b) = start()
     try:
@@ -478,6 +493,26 @@ def test_bricklink_deduction_rejected():
     _owl_sale_with_bricklink_failure("500", ["500", "ok"])
 
 
+def test_uncertain_lost_reply_does_not_deduct_again():
+    e, (a, b) = start()
+    try:
+        e.bo.sale({a: 2})
+        e.bl.server.fail("PUT", r"/inventories/\d+$", "drop_after", 1)
+        check(e.cycle()["result"] == "failed", "the lost reply was not kept pending")
+        with e.bl.lock:
+            e.bl.lots[a]["quantity"] = 20
+        check(e.cycle()["result"] == "failed", "the uncertain deduction should remain pending")
+        check(e.bl.qty(a) == 20, "stock was deducted again after an uncertain reply")
+        check(e.bo.qty(a) == 20, "the live manual stock was not preserved on Brick Owl")
+        check(e.status()["pending_bricklink_deductions"] == 1, "the uncertain sale record disappeared")
+        check(bl_quantity_writes(e) == [(a, -2, "drop_after")], "BrickLink was written again: %r" % bl_quantity_writes(e))
+        check(e.cycle()["result"] == "failed", "the uncertain deduction should still remain pending")
+        check(e.bl.qty(a) == 20, "stock changed during the next review cycle")
+        check(bl_quantity_writes(e) == [(a, -2, "drop_after")], "BrickLink was written again: %r" % bl_quantity_writes(e))
+    finally:
+        e.cleanup()
+
+
 def test_short_bricklink_stock_keeps_unresolved_remainder():
     e, (a, b) = start()
     try:
@@ -503,25 +538,31 @@ def test_short_bricklink_stock_keeps_unresolved_remainder():
         e.cleanup()
 
 
-def test_damaged_pending_file_is_preserved_and_sync_continues():
+def test_damaged_pending_file_stops_startup_without_removal_instruction():
     e = Env()
-    a = e.bl.add_lot("3001", 10, 1.25)
     damaged = "this is not a pending sale file\n"
     with open(e.path("data", "bricksync.blpending.txt"), "w") as f:
         f.write(damaged)
     try:
-        e.start()
-        check(e.status()["result"] == "ok", "startup did not continue: " + e.output()[-2000:])
-        preserved = sorted(name for name in os.listdir(e.path("data")) if name.startswith("bricksync.blpending.damaged"))
-        check(len(preserved) == 1, "damaged file was not preserved: %r" % preserved)
-        with open(e.path("data", preserved[0])) as f:
-            check(f.read() == damaged, "the preserved damaged file changed")
+        env = dict(os.environ, BS_TEST_BL_PORT=str(e.bl.server.port), BS_TEST_BO_PORT=str(e.bo.server.port))
+        e.out = open(e.path("stdout.txt"), "ab")
+        e.proc = subprocess.Popen([BINARY], cwd=e.dir, env=env, stdin=subprocess.PIPE, stdout=e.out, stderr=subprocess.STDOUT)
+        deadline = time.time() + 20
+        while "Do you agree to apply these changes" not in e.output():
+            check(time.time() < deadline and e.proc.poll() is None, "first setup did not reach its confirmation:\n" + e.output()[-3000:])
+            time.sleep(0.1)
+        e.send("yes")
+        deadline = time.time() + 20
+        while "must be reviewed before BrickSync can start" not in e.output():
+            check(time.time() < deadline and e.proc.poll() is None, "startup did not stop on the damaged file:\n" + e.output()[-3000:])
+            time.sleep(0.1)
+        plain = re.sub("\x1b\\[[0-9;]*m", "", e.output())
+        check("Fix or remove" not in plain and "remove it" not in plain, "startup still tells the user to remove the file")
         with open(e.path("data", "bricksync.blpending.txt")) as f:
-            check(f.read() == "BSLEDGER 1\n", "a clean active pending file was not created")
-        with e.bl.lock:
-            e.bl.lots[a]["quantity"] = 12
-        check(e.cycle()["result"] == "ok", "unrelated syncing stopped")
-        check(e.bo.qty(a) == 12, "unrelated stock did not sync")
+            check(f.read() == damaged, "the damaged pending sale file changed")
+        e.send("")
+        e.proc.wait(timeout=20)
+        check(e.proc.returncode != 0, "BrickSync did not stop after the damaged file warning")
     finally:
         e.cleanup()
 

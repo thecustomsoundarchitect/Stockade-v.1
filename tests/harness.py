@@ -11,7 +11,6 @@ bricklink.token = "tk0000";
 bricklink.tokensecret = "ts0000";
 brickowl.key = "bokey0000";
 checkmessage = 0;
-autosync = 1;
 '''
 
 

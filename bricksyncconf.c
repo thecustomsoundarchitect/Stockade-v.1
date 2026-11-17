@@ -453,13 +453,16 @@ static int bsConfParse( bsContext *context, bsConfParser *parser )
       {
         if( !( bsConfReadInteger( context, parser, &readint ) ) )
           goto error;
-        context->autosyncflag = ( readint ? 1 : 0 );
+        /* Accepted so older configuration files still load. Auto sync is always on. */
       }
       else if( ccStrMatchSeq( "autosyncinterval", tokenstring, token->length ) )
       {
         if( !( bsConfReadInteger( context, parser, &readint ) ) )
           goto error;
+#ifdef BS_TEST_HOOKS
+        /* Fake-store tests shorten the wait; normal operation is fixed at five minutes. */
         context->autosyncinterval = (int)readint;
+#endif
       }
       else if( ccStrMatchSeq( "retainemptylots", tokenstring, token->length ) )
       {

@@ -5,7 +5,7 @@
  * This file is an addition to BrickSync (altered source version, Stockade patches).
  * It is provided under the same terms as the rest of the software, see bricksync.c.
  *
- * One cycle, every autosyncinterval seconds:
+ * One cycle every five minutes in normal operation:
  *  1. Check both stores for orders (order files on disk make each order count once).
  *  2. Read the live BrickLink inventory. A failed read stops the cycle, nothing is written.
  *  3. Send the BrickOwl sales still owed to BrickLink, from the ledger file. Each one is recorded
@@ -241,25 +241,6 @@ static int bsAutoSyncLedgerLoad( bsContext *context )
 }
 
 
-static int bsAutoSyncLedgerPreserveDamaged( char *damagedpath, size_t damagedpathsize )
-{
-  int suffix;
-
-  for( suffix = 0 ; suffix < 10000 ; suffix++ )
-  {
-    if( suffix )
-      snprintf( damagedpath, damagedpathsize, BS_GLOBAL_PATH "bricksync.blpending.damaged.%d.txt", suffix );
-    else
-      snprintf( damagedpath, damagedpathsize, BS_GLOBAL_PATH "bricksync.blpending.damaged.txt" );
-    if( ccFileExists( damagedpath ) )
-      continue;
-    return ccRenameFile( BS_AUTOSYNC_LEDGER_FILE, damagedpath );
-  }
-  damagedpath[0] = 0;
-  return 0;
-}
-
-
 /* A BrickOwl order was merged into the tracked inventory with BS_MERGE_FLAGS_UPDATE_BRICKLINK:
    the BrickLink queue holds its deductions. Move them to the ledger, saved with the order's journal. */
 int bsAutoSyncLedgerAddOrder( bsContext *context, int64_t orderid, journalDef *journal )
@@ -373,10 +354,14 @@ static int bsAutoSyncSettleLedger( bsContext *context, bsxInventory *inv )
       if( !( item ) )
       {
         if( ( entry->pre - entry->quantity ) <= 0 )
+        {
           ioPrintf( &context->output, IO_MODEBIT_LOGONLY, "LOG: Auto sync: deduction of %d on BrickLink lot " CC_LLD " (BrickOwl order " CC_LLD ") is confirmed, the lot sold out.\n", entry->quantity, (long long)entry->lotid, (long long)entry->orderid );
-        else
-          ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_WARNING "Auto sync: BrickLink lot " CC_LLD " is gone, the deduction of %d for BrickOwl order " CC_LLD " has nothing left to apply to.\n", (long long)entry->lotid, entry->quantity, (long long)entry->orderid );
-        bsAutoSyncLedgerRemove( ledger, index );
+          bsAutoSyncLedgerRemove( ledger, index );
+          continue;
+        }
+        ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_WARNING "Auto sync: BrickLink lot " CC_LLD " is missing, so the deduction of %d for BrickOwl order " CC_LLD " can not be confirmed. It stays pending and no more stock will be removed.\n", (long long)entry->lotid, entry->quantity, (long long)entry->orderid );
+        pendingcount++;
+        index++;
         continue;
       }
       if( item->quantity == ( entry->pre - entry->quantity ) )
@@ -386,8 +371,13 @@ static int bsAutoSyncSettleLedger( bsContext *context, bsxInventory *inv )
         continue;
       }
       if( item->quantity != entry->pre )
-        ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_WARNING "Auto sync: BrickLink lot " CC_LLD " holds %d, expected %d (deducted) or %d (not deducted) for BrickOwl order " CC_LLD ". The lot was edited meanwhile; deducting %d so it can not be oversold. Please review this lot.\n", (long long)entry->lotid, item->quantity, entry->pre - entry->quantity, entry->pre, (long long)entry->orderid, entry->quantity );
-      /* Not applied (or unknown after an edit): send again below */
+      {
+        ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_WARNING "Auto sync: BrickLink lot " CC_LLD " holds %d, expected %d if deducted or %d if not deducted for BrickOwl order " CC_LLD ". The result is uncertain, so the deduction stays pending and no more stock will be removed.\n", (long long)entry->lotid, item->quantity, entry->pre - entry->quantity, entry->pre, (long long)entry->orderid );
+        pendingcount++;
+        index++;
+        continue;
+      }
+      /* The live quantity proves the first request did not change stock: send it once below. */
     }
     else if( !( item ) )
     {
@@ -877,8 +867,6 @@ void bsAutoSyncTick( bsContext *context )
 
 void bsAutoSyncInit( bsContext *context )
 {
-  char damagedpath[BS_CWD_PATH_MAX];
-
   DEBUG_SET_TRACKER();
 
   context->autosyncledger = malloc( sizeof(struct bsAutoSyncLedger) );
@@ -888,27 +876,10 @@ void bsAutoSyncInit( bsContext *context )
   context->autosynccyclecount = 0;
   context->autosyncalertsent = 0;
   context->autosyncerror[0] = 0;
-  if( !( context->autosyncflag ) )
-    return;
-#ifndef BS_TEST_HOOKS
-  if( context->autosyncinterval < BS_AUTOSYNC_INTERVAL_MIN )
-    context->autosyncinterval = BS_AUTOSYNC_INTERVAL_MIN;
-#endif
   if( !( bsAutoSyncLedgerLoad( context ) ) )
   {
-    if( !( bsAutoSyncLedgerPreserveDamaged( damagedpath, sizeof(damagedpath) ) ) )
-    {
-      ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_ERROR "The damaged pending BrickLink deduction file could not be preserved. Auto sync is off for this run, and BrickSync will remain open.\n" );
-      context->autosyncflag = 0;
-      return;
-    }
-    ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_WARNING "The damaged pending BrickLink deduction file was preserved as \"" IO_RED "%s" IO_WHITE "\". Its sales remain unresolved, and unrelated syncing will continue.\n", damagedpath );
-    if( !( bsAutoSyncLedgerSave( context, 0 ) ) )
-    {
-      ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_ERROR "A new pending BrickLink deduction file could not be created. Auto sync is off for this run, and BrickSync will remain open.\n" );
-      context->autosyncflag = 0;
-      return;
-    }
+    ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_ERROR "The pending BrickLink deduction file \"" IO_RED "%s" IO_WHITE "\" is damaged and must be reviewed before BrickSync can start.\n", BS_AUTOSYNC_LEDGER_FILE );
+    bsFatalError( context );
   }
   if( !( bsAutoSyncOwlIgnoreLoad( context ) ) )
   {

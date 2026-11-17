@@ -572,7 +572,6 @@ typedef struct
 #define BS_AUTOSYNC_STATUS_FILE BS_GLOBAL_PATH "autosync.status.json"
 #define BS_AUTOSYNC_STATUS_TEMP_FILE BS_GLOBAL_PATH "temp.autosync.status.json"
 #define BS_AUTOSYNC_INTERVAL_DEFAULT (5*60)
-#define BS_AUTOSYNC_INTERVAL_MIN (60)
 #define BS_AUTOSYNC_ALERT_FAILCOUNT (4)
 
 void bsAutoSyncInit( bsContext *context );
