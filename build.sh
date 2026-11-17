@@ -95,6 +95,7 @@ case "$target" in
     ;;
   macos-*)
     # Apple's clang; the binary runs on macOS 11 (Big Sur) and later
+    SOURCES="$SOURCES bsbackup.c"
     CC=clang
     case "$target" in
       macos-arm64) archflags="-arch arm64 -mmacosx-version-min=11.0" ;;
