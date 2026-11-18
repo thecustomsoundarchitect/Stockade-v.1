@@ -1565,12 +1565,12 @@ static int blParseLotValue( jsonParser *parser, jsonToken *token, bsxItem *item 
     valuestring = &parser->codestring[ valuetoken->offset ];
     if( valuetoken->length )
     {
-      decodedstring = jsonDecodeEscapeString( valuestring, valuetoken->length, 0 );
-      if( decodedstring )
-      {
-        bsxSetItemRemarks( item, decodedstring, strlen( decodedstring ) );
-        free( decodedstring );
-      }
+      decodedstring = jsonDecodeEscapeString( valuestring, valuetoken->length, &decodedlength );
+      if( decodedstring && blPublicNoteIsReadable( decodedstring, decodedlength ) )
+        bsxSetItemRemarks( item, decodedstring, decodedlength );
+      else
+        item->unreadableremarks = 1;
+      free( decodedstring );
     }
   }
   else if( blParseCheckName( name, namelen, "bulk" ) )
@@ -1754,8 +1754,7 @@ static int blParseInventory( jsonParser *parser, void *opaquedata )
 }
 
 
-/* Read order inventory */
-int blReadOrderInventory( bsxInventory *inv, char *string, ioLog *log )
+static int blReadInventoryReply( bsxInventory *inv, char *string, ioLog *log, int singlelot )
 {
   int retval;
   jsonTokenBuffer *tokenbuf;
@@ -1770,12 +1769,12 @@ int blReadOrderInventory( bsxInventory *inv, char *string, ioLog *log )
 
   if( jsonTokenExpect( &parser, JSON_TOKEN_LBRACE ) )
   {
-    blParseReply( &parser, blParseInventory, (void *)inv, 1, 1 );
+    blParseReply( &parser, singlelot ? blParseLot : blParseInventory, (void *)inv, !singlelot, 1 );
     jsonTokenExpect( &parser, JSON_TOKEN_RBRACE );
   }
 
   retval = 1;
-  if( parser.errorcount )
+  if( parser.errorcount || ( singlelot && inv->itemcount != 1 ) )
   {
     ioPrintf( parser.log, 0, "JSON Parse Errors Encountered\n" );
     retval = 0;
@@ -1791,14 +1790,21 @@ int blReadOrderInventory( bsxInventory *inv, char *string, ioLog *log )
 ////
 
 
-/* Read inventory */
+int blReadOrderInventory( bsxInventory *inv, char *string, ioLog *log )
+{
+  return blReadInventoryReply( inv, string, log, 0 );
+}
+
+
 int blReadInventory( bsxInventory *inv, char *string, ioLog *log )
 {
-  DEBUG_SET_TRACKER();
+  return blReadInventoryReply( inv, string, log, 0 );
+}
 
-  /* Format about identical to order inventory! */
-  /* Code can handle the difference ( [[...]] versus [...] ) just fine */
-  return blReadOrderInventory( inv, string, log );
+
+int blReadInventoryLot( bsxInventory *inv, char *string, ioLog *log )
+{
+  return blReadInventoryReply( inv, string, log, 1 );
 }
 
 

@@ -38,6 +38,8 @@
 #include "cryptsha1.h"
 
 #if CC_UNIX
+ #include <errno.h>
+ #include <fcntl.h>
  #include <sys/types.h>
  #include <sys/stat.h>
  #include <unistd.h>
@@ -710,55 +712,348 @@ static void bsAutoSyncFilterOwlIgnored( bsContext *context, bsxInventory *inv )
 }
 
 
+static int bsBrickLinkUpdateLotText( bsContext *context, bsxItem *liveitem, char *note, char *remark )
+{
+  int result;
+  bsxInventory *update;
+  bsxItem *item;
+
+  update = bsxNewInventory();
+  item = bsxAddCopyItem( update, liveitem );
+  item->flags &= ~( BSX_ITEM_XFLAGS_TO_CREATE | BSX_ITEM_XFLAGS_TO_DELETE | BSX_ITEM_XFLAGS_TO_UPDATE | BSX_ITEM_XFLAGS_UPDATEMASK );
+  item->flags |= BSX_ITEM_XFLAGS_TO_UPDATE;
+  if( note )
+  {
+    bsxSetItemComments( item, note, -1 );
+    item->flags |= BSX_ITEM_XFLAGS_UPDATE_COMMENTS;
+  }
+  if( remark )
+  {
+    bsxSetItemRemarks( item, remark, -1 );
+    item->flags |= BSX_ITEM_XFLAGS_UPDATE_REMARKS;
+  }
+  result = bsBrickLinkApplySingle( context, item );
+  bsxFreeInventory( update );
+  return result;
+}
+
+
+static char *bsBrickLinkOwlSkipRemark( bsxItem *item )
+{
+  char *remark;
+
+  remark = item->remarks ? item->remarks : "";
+  if( item->unreadableremarks || item->unreadablecomments || strlen( remark ) >= 255 )
+    return 0;
+  return ccStrAllocPrintf( "%s~", remark );
+}
+
+
 /* Tammy: BrickLink is primary. Skip problem items on Brick Owl. She accepts
    the risk that an edit during the ~ marker write could be overwritten and
    does not want to be asked about this risk again. */
 static int bsAutoSyncMarkSaleFailure( bsContext *context, int64_t lotid )
 {
   int result;
-  bsxItem *tagitem, *freshitem;
-  bsxInventory *taginv, *freshinv;
-  char *remarks;
+  bsxItem *item;
+  bsxInventory *inv;
+  char *remark;
 
-  freshinv = bsQueryBrickLinkInventory( context );
-  if( !( freshinv ) )
+  inv = bsQueryBrickLinkInventory( context );
+  if( !inv )
     return 0;
-  freshitem = bsxFindLotID( freshinv, lotid );
-  if( !( freshitem ) )
-  {
-    bsxFreeInventory( freshinv );
-    return 0;
-  }
-  if( freshitem->remarks && strchr( freshitem->remarks, '~' ) )
-  {
-    bsxFreeInventory( freshinv );
+  item = bsxFindLotID( inv, lotid );
+  result = item && bsInvItemFilterFlag( context, item );
+  remark = item && !result ? bsBrickLinkOwlSkipRemark( item ) : 0;
+  if( remark )
+    result = bsBrickLinkUpdateLotText( context, item, 0, remark ) == HTTP_RESULT_SUCCESS;
+  bsxFreeInventory( inv );
+  if( !remark )
+    return result;
+  free( remark );
+  if( result )
     return 1;
-  }
-  if( freshitem->remarks && ( strlen( freshitem->remarks ) >= 255 ) )
-  {
-    bsxFreeInventory( freshinv );
+
+  inv = bsQueryBrickLinkInventory( context );
+  if( !inv )
     return 0;
-  }
-  remarks = ccStrAllocPrintf( "%s~", ( freshitem->remarks ? freshitem->remarks : "" ) );
-  taginv = bsxNewInventory();
-  tagitem = bsxAddCopyItem( taginv, freshitem );
-  bsxSetItemRemarks( tagitem, remarks, -1 );
-  free( remarks );
-  tagitem->flags &= ~( BSX_ITEM_XFLAGS_TO_CREATE | BSX_ITEM_XFLAGS_TO_DELETE | BSX_ITEM_XFLAGS_TO_UPDATE | BSX_ITEM_XFLAGS_UPDATEMASK );
-  tagitem->flags |= BSX_ITEM_XFLAGS_TO_UPDATE | BSX_ITEM_XFLAGS_UPDATE_REMARKS;
-  result = bsBrickLinkApplySingle( context, tagitem );
-  bsxFreeInventory( taginv );
-  bsxFreeInventory( freshinv );
-  if( result == HTTP_RESULT_SUCCESS )
-    return 1;
-  freshinv = bsQueryBrickLinkInventory( context );
-  if( !( freshinv ) )
-    return 0;
-  freshitem = bsxFindLotID( freshinv, lotid );
-  result = freshitem && freshitem->remarks && strchr( freshitem->remarks, '~' );
-  bsxFreeInventory( freshinv );
+  item = bsxFindLotID( inv, lotid );
+  result = item && bsInvItemFilterFlag( context, item );
+  bsxFreeInventory( inv );
   return result;
 }
+
+
+#if CC_UNIX
+
+#define BS_STOCKADE_LOT_REQUEST BS_GLOBAL_PATH "stockade-lot-request.json"
+#define BS_STOCKADE_LOT_CLAIM BS_GLOBAL_PATH "stockade-lot-request.claimed"
+#define BS_STOCKADE_LOT_RESULT BS_GLOBAL_PATH "stockade-lot-result.json"
+#define BS_STOCKADE_LOT_TEXT_LIMIT 32768
+
+typedef struct
+{
+  char *requestid;
+  char *lotid;
+  char *action;
+  char *note;
+} bsStockadeLotRequest;
+
+
+static char *bsStockadeReadPrivateFile( const char *path )
+{
+  int fd;
+  struct stat status;
+  char *data;
+
+  fd = open( path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK );
+  if( fd < 0 )
+    return 0;
+  data = 0;
+  if( fstat( fd, &status ) == 0 && S_ISREG( status.st_mode ) && status.st_uid == geteuid() &&
+      !( status.st_mode & ( S_IRWXG | S_IRWXO ) ) && status.st_size > 0 &&
+      status.st_size <= BS_STOCKADE_LOT_TEXT_LIMIT )
+  {
+    data = malloc( status.st_size + 1 );
+    if( data && read( fd, data, status.st_size ) == status.st_size &&
+        !memchr( data, 0, status.st_size ) )
+      data[status.st_size] = 0;
+    else
+    {
+      free( data );
+      data = 0;
+    }
+  }
+  close( fd );
+  return data;
+}
+
+
+static int bsStockadePublishPrivateFile( const char *path, const char *data )
+{
+  char temporary[] = BS_GLOBAL_PATH ".stockade-lot.XXXXXX";
+  int fd, result;
+  size_t length;
+
+  fd = mkstemp( temporary );
+  if( fd < 0 )
+    return 0;
+  length = strlen( data );
+  result = write( fd, data, length ) == (ssize_t)length && fsync( fd ) == 0;
+  if( close( fd ) != 0 )
+    result = 0;
+  if( result && rename( temporary, path ) == 0 )
+  {
+    fd = open( BS_GLOBAL_PATH, O_RDONLY | O_DIRECTORY );
+    if( fd < 0 )
+      return 0;
+    result = fsync( fd ) == 0;
+    close( fd );
+    return result;
+  }
+  unlink( temporary );
+  return 0;
+}
+
+
+static int bsStockadeParseLotRequest( bsContext *context, char *data, bsStockadeLotRequest *request )
+{
+  jsonParser parser;
+  jsonTokenBuffer *tokens;
+  jsonToken *name, *value;
+  char **field;
+  int result, length;
+
+  tokens = jsonLexParse( data, &context->output );
+  if( !tokens )
+    return 0;
+  jsonTokenInit( &parser, data, tokens, &context->output );
+  result = 0;
+  if( !jsonTokenAccept( &parser, JSON_TOKEN_LBRACE ) )
+    goto done;
+  do
+  {
+    name = jsonTokenAccept( &parser, JSON_TOKEN_STRING );
+    if( !name || !jsonTokenAccept( &parser, JSON_TOKEN_COLON ) )
+      goto done;
+    value = jsonTokenAccept( &parser, JSON_TOKEN_STRING );
+    if( !value )
+      goto done;
+    if( name->length == sizeof( "request_id" ) - 1 && !memcmp( data + name->offset, "request_id", name->length ) )
+      field = &request->requestid;
+    else if( name->length == sizeof( "lot_id" ) - 1 && !memcmp( data + name->offset, "lot_id", name->length ) )
+      field = &request->lotid;
+    else if( name->length == sizeof( "action" ) - 1 && !memcmp( data + name->offset, "action", name->length ) )
+      field = &request->action;
+    else if( name->length == sizeof( "note" ) - 1 && !memcmp( data + name->offset, "note", name->length ) )
+      field = &request->note;
+    else
+      goto done;
+    if( *field )
+      goto done;
+    *field = jsonDecodeEscapeString( data + value->offset, value->length, &length );
+    if( !*field || strlen( *field ) != (size_t)length )
+      goto done;
+  } while( jsonTokenAccept( &parser, JSON_TOKEN_COMMA ) );
+  result = jsonTokenAccept( &parser, JSON_TOKEN_RBRACE ) && parser.tokentype == JSON_TOKEN_END;
+
+done:
+  jsonLexFree( tokens );
+  return result;
+}
+
+
+static int bsStockadeLotRequestIdValid( const char *id )
+{
+  static const char allowed[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_";
+  return id && *id && strlen( id ) <= 128 && strspn( id, allowed ) == strlen( id );
+}
+
+
+static int bsStockadeWriteLotResult( const char *id, const char *error, bsxItem *item )
+{
+  ccGrowth growth;
+  char *note, *remark;
+  int result;
+
+  ccGrowthInit( &growth, 256 );
+  ccGrowthPrintf( &growth, "{\"request_id\":\"%s\",\"status\":\"%s\",\"message\":\"%s\"",
+    id, error ? "error" : "ok", error ? error : "BrickLink lot verified." );
+  if( item && !item->unreadablecomments )
+  {
+    note = item->comments ? jsonEncodeEscapeString( item->comments, strlen( item->comments ), 0 ) : 0;
+    ccGrowthPrintf( &growth, ",\"note\":\"%s\"", note ? note : "" );
+    free( note );
+  }
+  if( item && !item->unreadableremarks )
+  {
+    remark = item->remarks ? jsonEncodeEscapeString( item->remarks, strlen( item->remarks ), 0 ) : 0;
+    ccGrowthPrintf( &growth, ",\"remark\":\"%s\"", remark ? remark : "" );
+    free( remark );
+  }
+  ccGrowthPrintf( &growth, "}\n" );
+  result = bsStockadePublishPrivateFile( BS_STOCKADE_LOT_RESULT, growth.data );
+  ccGrowthFree( &growth );
+  return result;
+}
+
+
+static int bsStockadeHandleLotRequest( bsContext *context, bsStockadeLotRequest *request )
+{
+  const char *error;
+  char *remark;
+  int64_t lotid;
+  int edit, skip, result;
+  bsxInventory *inv;
+  bsxItem *item;
+
+  if( !request->lotid || !*request->lotid || strspn( request->lotid, "0123456789" ) != strlen( request->lotid ) )
+    return bsStockadeWriteLotResult( request->requestid, "Enter an exact BrickLink lot ID.", 0 );
+  errno = 0;
+  lotid = strtoll( request->lotid, 0, 10 );
+  if( errno || lotid <= 0 )
+    return bsStockadeWriteLotResult( request->requestid, "Enter an exact BrickLink lot ID.", 0 );
+  if( !request->action )
+    return bsStockadeWriteLotResult( request->requestid, "Invalid lot action.", 0 );
+  edit = !strcmp( request->action, "edit_note" );
+  skip = !strcmp( request->action, "skip_owl" );
+  if( ( !edit && !skip && strcmp( request->action, "lookup" ) ) || ( edit && !request->note ) )
+    return bsStockadeWriteLotResult( request->requestid, "Invalid lot action.", 0 );
+
+  inv = bsQueryBrickLinkInventoryLot( context, lotid );
+  if( !inv )
+    return bsStockadeWriteLotResult( request->requestid, "BrickLink could not read this lot.", 0 );
+  item = bsxFindLotID( inv, lotid );
+  error = 0;
+  remark = 0;
+  if( !item )
+    error = "BrickLink did not return the selected lot ID.";
+  else if( skip && !bsInvItemFilterFlag( context, item ) )
+  {
+    remark = bsBrickLinkOwlSkipRemark( item );
+    if( !remark )
+      error = "The marker would not preserve the current BrickLink text.";
+  }
+
+  if( item && edit && !item->unreadablecomments &&
+      !strcmp( item->comments ? item->comments : "", request->note ) )
+    edit = 0;
+  if( !error && ( remark || edit ) )
+  {
+    bsBrickLinkUpdateLotText( context, item, edit ? request->note : 0, remark );
+    /* Read back the selected field. A lost reply must never resend the write. */
+    bsxFreeInventory( inv );
+    inv = bsQueryBrickLinkInventoryLot( context, lotid );
+    item = inv ? bsxFindLotID( inv, lotid ) : 0;
+    if( !item ||
+        ( edit && ( item->unreadablecomments || strcmp( item->comments ? item->comments : "", request->note ) ) ) ||
+        ( remark && ( item->unreadableremarks || !item->remarks || strcmp( item->remarks, remark ) ) ) )
+      error = "BrickLink did not confirm the update. Reload this lot before trying again.";
+  }
+
+  result = bsStockadeWriteLotResult( request->requestid, error, item );
+  if( inv )
+    bsxFreeInventory( inv );
+  free( remark );
+  return result;
+}
+
+
+static int bsStockadeHasLotResult( const char *id )
+{
+  char *data, *prefix;
+  int found;
+
+  data = bsStockadeReadPrivateFile( BS_STOCKADE_LOT_RESULT );
+  if( !data )
+    return 0;
+  prefix = ccStrAllocPrintf( "{\"request_id\":\"%s\",", id );
+  found = !strncmp( data, prefix, strlen( prefix ) );
+  free( prefix );
+  free( data );
+  return found;
+}
+
+
+static void bsStockadePollLotRequest( bsContext *context )
+{
+  bsStockadeLotRequest request = { 0 };
+  char *data, *claimed;
+  int parsed, done;
+
+  data = bsStockadeReadPrivateFile( BS_STOCKADE_LOT_REQUEST );
+  if( !data )
+    return;
+  parsed = bsStockadeParseLotRequest( context, data, &request );
+  free( data );
+  if( !bsStockadeLotRequestIdValid( request.requestid ) )
+    unlink( BS_STOCKADE_LOT_REQUEST );
+  else
+  {
+    claimed = bsStockadeReadPrivateFile( BS_STOCKADE_LOT_CLAIM );
+    if( bsStockadeHasLotResult( request.requestid ) )
+      done = 1;
+    else if( claimed && !strcmp( claimed, request.requestid ) )
+      done = bsStockadeWriteLotResult( request.requestid, "An earlier attempt may have reached BrickLink. Reload this lot before trying again.", 0 );
+    else if( !parsed )
+      done = bsStockadeWriteLotResult( request.requestid, "Invalid lot request.", 0 );
+    /* Keep the request visible until the result is published. Claim it durably
+       before using the API so a restart never replays a potentially applied edit. */
+    else if( bsStockadePublishPrivateFile( BS_STOCKADE_LOT_CLAIM, request.requestid ) )
+      done = bsStockadeHandleLotRequest( context, &request );
+    else
+      done = 0;
+    if( done && unlink( BS_STOCKADE_LOT_REQUEST ) == 0 )
+      unlink( BS_STOCKADE_LOT_CLAIM );
+    free( claimed );
+  }
+  free( request.requestid );
+  free( request.lotid );
+  free( request.action );
+  free( request.note );
+}
+
+#endif
 
 
 /* A repeated sale difference after an acknowledged pass permanently excludes the lot. */
@@ -1229,6 +1524,10 @@ void bsAutoSyncTick( bsContext *context )
   int attempt, result;
 
   DEBUG_SET_TRACKER();
+
+#if CC_UNIX
+  bsStockadePollLotRequest( context );
+#endif
 
   /* The check and sync commands (and SIGUSR1) ask for a cycle now */
   if( !( context->stateflags & BS_AUTOSYNC_ALL_WORK_FLAGS ) && ( context->curtime < context->autosynctime ) )

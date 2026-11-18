@@ -101,7 +101,8 @@ static void bsBrickLinkReplyInventory( void *uservalue, int resultcode, httpResp
   inv = (bsxInventory *)reply->opaquepointer;
   if( ( reply->result == HTTP_RESULT_SUCCESS ) && ( response->body ) )
   {
-    if( !( blReadInventory( inv, (char *)response->body, &context->output ) ) )
+    if( !( reply->extid ? blReadInventoryLot( inv, (char *)response->body, &context->output ) :
+                        blReadInventory( inv, (char *)response->body, &context->output ) ) )
     {
       /* Drop what was read before the failure, or the retry would add those lots a second time */
       bsxEmptyInventory( inv );
@@ -114,29 +115,33 @@ static void bsBrickLinkReplyInventory( void *uservalue, int resultcode, httpResp
 }
 
 
-/* Query the inventory from BrickLink */
-bsxInventory *bsQueryBrickLinkInventory( bsContext *context )
+static bsxInventory *bsQueryBrickLinkInventoryRead( bsContext *context, int64_t lotid )
 {
   bsQueryReply *reply;
   bsxInventory *inv;
   bsTracker tracker;
+  char lotpath[64];
+  char *path, *parameters;
 
   DEBUG_SET_TRACKER();
 
+  path = "/api/store/v1/inventories";
+  parameters = "status=Y";
+  if( lotid )
+  {
+    snprintf( lotpath, sizeof(lotpath), "/api/store/v1/inventories/" CC_LLD, (long long)lotid );
+    path = lotpath;
+    parameters = 0;
+    ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_INFO "Fetching BrickLink lot " CC_LLD "...\n", (long long)lotid );
+  }
+  else
+    ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_INFO "Fetching the BrickLink Inventory...\n" );
   bsTrackerInit( &tracker, context->bricklink.http );
   inv = bsxNewInventory();
-  ioPrintf( &context->output, IO_MODEBIT_FLUSH, BSMSG_INFO "Fetching the BrickLink Inventory...\n" );
   for( ; ; )
   {
-    /* Add an Inventory query */
-    reply = bsAllocReply( context, BS_QUERY_TYPE_BRICKLINK, 0, 0, (void *)inv );
-#if 1
-    /* Only available inventory */
-    bsBrickLinkAddQuery( context, "GET", "/api/store/v1/inventories", "status=Y", 0, (void *)reply, bsBrickLinkReplyInventory );
-#else
-    /* Available + stockroom? */
-    bsBrickLinkAddQuery( context, "GET", "/api/store/v1/inventories", "status=Y%2CS", 0, (void *)reply, bsBrickLinkReplyInventory );
-#endif
+    reply = bsAllocReply( context, BS_QUERY_TYPE_BRICKLINK, lotid, 0, (void *)inv );
+    bsBrickLinkAddQuery( context, "GET", path, parameters, 0, (void *)reply, bsBrickLinkReplyInventory );
     /* Wait until all queries are processed */
     bsWaitBrickLinkQueries( context, 0 );
     /* Free all queued replies, break on success */
@@ -150,6 +155,20 @@ bsxInventory *bsQueryBrickLinkInventory( bsContext *context )
   }
 
   return inv;
+}
+
+
+bsxInventory *bsQueryBrickLinkInventory( bsContext *context )
+{
+  return bsQueryBrickLinkInventoryRead( context, 0 );
+}
+
+
+bsxInventory *bsQueryBrickLinkInventoryLot( bsContext *context, int64_t lotid )
+{
+  if( lotid <= 0 )
+    return 0;
+  return bsQueryBrickLinkInventoryRead( context, lotid );
 }
 
 

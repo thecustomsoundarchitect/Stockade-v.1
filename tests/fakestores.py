@@ -184,6 +184,8 @@ class FakeBrickLink:
             lotid = int(m.group(1))
             if lotid not in self.lots:
                 return bl_err(404, "RESOURCE_NOT_FOUND")
+            if method == "GET":
+                return bl_ok(dict(self.lots[lotid]))
             if method == "DELETE":
                 del self.lots[lotid]
                 return bl_ok({})

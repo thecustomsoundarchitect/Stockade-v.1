@@ -42,6 +42,7 @@ int blReadOrderInventory( bsxInventory *inv, char *string, ioLog *log );
 
 /* Read inventory */
 int blReadInventory( bsxInventory *inv, char *string, ioLog *log );
+int blReadInventoryLot( bsxInventory *inv, char *string, ioLog *log );
 
 /* Read lotID for a single lot, as reply to a lot creation */
 int blReadLotID( int64_t *retlotid, char *string, ioLog *log );

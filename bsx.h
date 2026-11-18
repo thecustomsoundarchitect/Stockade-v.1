@@ -56,6 +56,8 @@ typedef struct
   char status;
   /* The current BrickLink public note could not be decoded. */
   char unreadablecomments;
+  /* The current BrickLink private remark could not be decoded. */
+  char unreadableremarks;
   /* ColorID (int) */
   int colorid;
   /* Qty (int) */

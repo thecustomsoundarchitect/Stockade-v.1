@@ -1,0 +1,26 @@
+:root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1d2d3c; background: #f2f5f7; font-size: 16px; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 900px; margin: 0 auto; padding: 32px 24px 60px; }
+header { margin: 0 0 30px; }
+h1 { margin: 0; font-size: 2rem; }
+header p { margin: 6px 0 0; color: #526270; }
+h2 { font-size: 1.2rem; margin: 0 0 20px; }
+section { background: #fff; border: 1px solid #d5dfe5; border-radius: 8px; padding: 24px; margin-bottom: 16px; }
+section p { margin: 12px 0; }
+section p:last-child { margin-bottom: 0; }
+.status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.field { display: flex; flex-direction: column; gap: 8px; }
+.label, .detail { color: #526270; }
+.field strong { font-size: 1.15rem; }
+#cycle-time { color: #526270; }
+.notice { padding: 16px; margin-bottom: 16px; background: #fff1d6; border: 1px solid #dfbd79; border-radius: 8px; }
+pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+ul { padding-left: 24px; margin: 12px 0 0; }
+li { margin-bottom: 8px; overflow-wrap: anywhere; }
+#lot-controls input, #lot-controls textarea, #lot-controls button { font: inherit; }
+#lot-fields { margin-top: 16px; }
+#lot-note { display: block; width: 100%; margin-top: 6px; }
+#lot-remark { overflow-wrap: anywhere; white-space: pre-wrap; }
+[hidden] { display: none !important; }
+@media (max-width: 600px) { main { padding: 24px 16px 48px; } section { padding: 20px; } .status-grid { grid-template-columns: 1fr; } }

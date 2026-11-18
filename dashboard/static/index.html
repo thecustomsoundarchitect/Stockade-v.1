@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stockade</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><h1>Stockade</h1><p>Store syncing</p></header>
+    <div id="connection" class="notice" role="status" hidden>Dashboard connection unavailable. Trying again.</div>
+    <section aria-labelledby="status-heading">
+      <h2 id="status-heading">Status</h2>
+      <div class="status-grid">
+        <div class="field"><span class="label">BrickSync</span><strong id="service">Checking</strong></div>
+        <div class="field"><span class="label">Latest sync attempt</span><strong id="cycle">Checking</strong><span id="cycle-time"></span></div>
+      </div>
+      <p id="cycle-detail" class="detail" hidden></p>
+      <p id="cycle-failure-count" class="detail" hidden></p>
+      <p>Sync failure email: <strong id="failure-email-status">Unavailable</strong></p>
+      <p>Downtime email: <strong id="downtime-email-status">Unavailable</strong></p>
+    </section>
+    <section id="lot-controls" aria-labelledby="lot-heading" hidden>
+      <h2 id="lot-heading">BrickLink lot</h2>
+      <form id="lot-form">
+        <label for="lot-id">BrickLink lot ID</label>
+        <input id="lot-id" type="text" inputmode="numeric" autocomplete="off" pattern="[1-9][0-9]{0,18}" required>
+        <button id="load-lot" type="submit">Load lot</button>
+      </form>
+      <div id="lot-fields" hidden>
+        <label for="lot-note">Public Note</label>
+        <p id="lot-note-unreadable" class="detail" hidden>The current public Note is unreadable. You can enter a replacement.</p>
+        <textarea id="lot-note" rows="4"></textarea>
+        <p class="detail"><strong>Remark</strong> <span id="lot-remark"></span><em id="lot-remark-state" hidden></em></p>
+        <button id="save-lot-note" type="button">Save Note</button>
+        <button id="skip-lot-owl" type="button">Skip on Brick Owl</button>
+      </div>
+      <p id="lot-message" role="status" hidden></p>
+    </section>
+    <section aria-labelledby="report-heading">
+      <h2 id="report-heading">Latest stock update</h2>
+      <p id="report-summary">Checking</p>
+      <pre id="report-detail" hidden></pre>
+      <p>Stock update email: <strong id="report-email-status">Unavailable</strong></p>
+    </section>
+    <section aria-labelledby="quarantine-heading">
+      <h2 id="quarantine-heading">Quarantine</h2>
+      <p><strong id="quarantine-summary">Checking</strong></p>
+      <p id="quarantine-time" class="detail"></p>
+      <ul id="quarantine-list"></ul>
+      <p>Email at ten items: <strong id="email-status">Unavailable</strong></p>
+    </section>
+    <section aria-labelledby="sale-heading">
+      <h2 id="sale-heading">Sale percentage problem items</h2>
+      <p class="detail">These are the saved Brick Owl sale percentage skips. They are not a complete quarantine list.</p>
+      <p id="sale-summary">Checking</p>
+      <ul id="sale-list"></ul>
+    </section>
+  </main>
+</body>
+</html>

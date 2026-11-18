@@ -707,6 +707,7 @@ int bsOrderListFilterOutDateConditional( bsContext *context, bsOrderList *orderl
 
 /* Query the inventory from BrickLink */
 bsxInventory *bsQueryBrickLinkInventory( bsContext *context );
+bsxInventory *bsQueryBrickLinkInventoryLot( bsContext *context, int64_t lotid );
 /* Query the inventory from BrickOwl */
 bsxInventory *bsQueryBrickOwlInventory( bsContext *context );
 

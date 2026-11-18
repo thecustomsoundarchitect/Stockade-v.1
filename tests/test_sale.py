@@ -1,5 +1,6 @@
 """Sale percentage tests (Patch 4). Run:  python3 tests/test_sale.py"""
 import json
+import time
 from pathlib import Path
 
 import test_autosync
@@ -326,6 +327,124 @@ def test_lost_sale_reply_does_not_ignore_working_lot():
         finally:
             e.cleanup()
 
+
+
+def test_stockade_note_and_marker_target_only_the_selected_lot():
+    same_lot = (("3001", 10, 1.25), {"description": "Original note", "remarks": "Original bin"})
+    env, (selected, neighbor) = start(lots=(same_lot, same_lot))
+    try:
+        request_path = Path(env.path("data", "stockade-lot-request.json"))
+        result_path = Path(env.path("data", "stockade-lot-result.json"))
+        claim_path = Path(env.path("data", "stockade-lot-request.claimed"))
+        original_neighbor = dict(env.bl.lots[neighbor])
+
+        def request(request_id, action, lot=selected, **extra):
+            temporary = request_path.with_suffix(".tmp")
+            payload = {"request_id": request_id, "lot_id": str(lot), "action": action, **extra}
+            temporary.write_text(json.dumps(payload))
+            temporary.chmod(0o600)
+            temporary.replace(request_path)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if not request_path.exists() and result_path.exists():
+                    result = json.loads(result_path.read_text())
+                    if result["request_id"] == request_id:
+                        return result
+                time.sleep(0.05)
+            raise AssertionError(f"No result for {request_id}: {env.output()[-3000:]}")
+
+        lookup = request("lookup", "lookup")
+        check(lookup["status"] == "ok" and lookup["note"] == "Original note" and
+              lookup["remark"] == "Original bin", "the lookup did not read the selected lot")
+        check(env.bl.server.writes() == [], "the lookup wrote to BrickLink")
+
+        env.bl.lots[selected]["remarks"] = "  Current bin  "
+        note = 'Public "note" with café'
+        edited = request("edit-note", "edit_note", note=note)
+        check(edited["status"] == "ok" and edited["note"] == note and
+              edited["remark"] == "  Current bin  ", "editing the Note changed the current Remark")
+        check(env.bl.lots[selected]["description"] == note and
+              env.bl.lots[selected]["remarks"] == "  Current bin  ", "BrickLink Note update was not exact")
+
+        env.bl.lots[selected]["remarks"] = "  Newer bin  "
+        env.bl.server.fail("PUT", r"/inventories/\d+$", "drop_after", 1)
+        marked = request("skip-owl", "skip_owl")
+        check(marked["status"] == "ok" and marked["note"] == note and
+              marked["remark"] == "  Newer bin  ~", "the marker did not preserve the current texts")
+        repeated = request("skip-owl-again", "skip_owl")
+        check(repeated["status"] == "ok" and repeated["remark"] == "  Newer bin  ~",
+              "a second marker action changed the Remark")
+
+        claim_path.write_text("interrupted")
+        claim_path.chmod(0o600)
+        interrupted = request("interrupted", "edit_note", note="Never replay this edit")
+        check(interrupted["status"] == "error" and "Reload" in interrupted["message"],
+              "an interrupted request did not require a fresh lookup")
+        check(env.bl.lots[selected]["description"] == note, "an interrupted request replayed")
+
+        writes = env.bl.server.writes()
+        check([(method, path) for method, path, *_ in writes] ==
+              [("PUT", f"/api/store/v1/inventories/{selected}")] * 2,
+              f"expected two writes to only the selected lot: {writes!r}")
+        check(json.loads(writes[0][3]) == {"inventory_id": selected, "description": note},
+              "the public Note edit wrote other fields")
+        check(json.loads(writes[1][3]) == {"inventory_id": selected, "description": note,
+                                         "remarks": "  Newer bin  ~"}, "the marker wrote other fields")
+        check(env.bl.lots[neighbor] == original_neighbor, "an otherwise identical lot changed")
+        check(env.cycle()["result"] == "ok", "ordinary sync failed after adding the marker")
+        check(env.bo.find(selected) is None and env.bo.qty(neighbor) == 10,
+              "ordinary sync did not omit just the selected lot on Brick Owl")
+        check(env.bl.qty(selected) == 10 and env.bl.lots[neighbor] == original_neighbor,
+              "ordinary sync changed BrickLink stock")
+
+        stockroom = env.bl.add_lot(*same_lot[0], **same_lot[1])
+        with env.bl.lock:
+            env.bl.lots[stockroom].update(is_stock_room=True, stock_room_id="B")
+            original_stockroom = dict(env.bl.lots[stockroom])
+            original_selected = dict(env.bl.lots[selected])
+        env.bl.server.clear_log()
+        stockroom_path = f"/api/store/v1/inventories/{stockroom}"
+        original_handler = env.bl.server.handler
+
+        def wrong_lot(method, path, query, body):
+            if method == "GET" and path == stockroom_path:
+                path = f"/api/store/v1/inventories/{neighbor}"
+            return original_handler(method, path, query, body)
+
+        with env.bl.lock:
+            env.bl.server.handler = wrong_lot
+        mismatched = request("mismatched-id", "edit_note", lot=stockroom, note="Keep the current Note")
+        with env.bl.lock:
+            env.bl.server.handler = original_handler
+        check(mismatched["status"] == "error" and env.bl.server.writes() == [],
+              "a response for another lot authorized a write")
+        env.bl.server.clear_log()
+
+        lookup = request("stockroom-lookup", "lookup", lot=stockroom)
+        check(lookup["status"] == "ok" and lookup["note"] == "Original note" and
+              lookup["remark"] == "Original bin", "stockroom lot was not found by exact ID")
+        with env.bl.lock:
+            reads = [(method, path, query) for method, path, query, *_ in env.bl.server.log]
+        check(reads == [("GET", stockroom_path, "")], f"stockroom lookup did not use the exact route: {reads!r}")
+
+        edited = request("stockroom-edit", "edit_note", lot=stockroom, note=note)
+        check(edited["status"] == "ok" and edited["note"] == note and
+              edited["remark"] == "Original bin", "stockroom Note edit did not preserve the Remark")
+        marked = request("stockroom-skip", "skip_owl", lot=stockroom)
+        check(marked["status"] == "ok" and marked["note"] == note and
+              marked["remark"] == "Original bin~", "stockroom marker did not preserve the Note")
+        writes = env.bl.server.writes()
+        check([(method, path, json.loads(body)) for method, path, _, body, _ in writes] ==
+              [("PUT", stockroom_path, {"inventory_id": stockroom, "description": note}),
+               ("PUT", stockroom_path, {"inventory_id": stockroom, "description": note, "remarks": "Original bin~"})],
+              f"stockroom actions wrote the wrong lot or fields: {writes!r}")
+        check(env.bl.lots[stockroom] == {**original_stockroom, "description": note, "remarks": "Original bin~"}
+              and env.bl.lots[selected] == original_selected and env.bl.lots[neighbor] == original_neighbor,
+              "stockroom actions changed other stock or moved the lot")
+        check(env.cycle()["result"] == "ok" and env.bo.find(stockroom) is None and env.bo.qty(neighbor) == 10,
+              "ordinary sync changed its stockroom scope")
+    finally:
+        env.cleanup()
 
 
 if __name__ == "__main__":
