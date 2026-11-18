@@ -21,6 +21,7 @@
  * -----------------------------------------------------------------------------
  */
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -295,42 +296,93 @@ int bsEvalulatePartCondition( char *comments )
 ////
 
 
-/* Stockade grading rule: a used item is Good. If its public note has one of the words below in it,
-   it is Acceptable. Sets are not graded by this rule.
-
-   TASK FOR TAMMY: pick the words. The list is empty until Tammy gives the words; nobody else picks
-   them. While it is empty every used item (except sets) is Good.
-   Each word goes on its own line, in lower case, inside quotes, followed by a comma, above the 0. */
-static const char * const bsDefectWords[] =
+/* Tammy's words and phrases that make an eligible used item Acceptable. */
+static const char * const bsDefectTerms[] =
 {
+  "wear", "playwear", "playware", "surface ware",
+  "damage", "damaged", "crack", "cracks", "cracked", "hairline cracks", "broken", "bent",
+  "scratch", "scratches", "scratching", "scratchs", "scratcing", "scrathches",
+  "scuff", "scuffs", "scuffing", "pitting", "pit marks", "dents", "dings", "nicks", "knicks",
+  "stains", "smudge", "fading", "faded", "fadded", "discoloration", "yellowing",
+  "fray", "fraying", "frayed", "crease", "creases", "tear", "loose", "sticker coming up", "corner lifted",
   0
 };
 
-int bsNoteDescribesDefect( const char *comments )
-{
-  int index, length, defectflag;
-  char *note;
-  char c;
 
-  if( !( comments ) )
-    return 0;
-  length = strlen( comments );
-  note = malloc( length + 1 );
-  for( index = 0 ; index < length ; index++ )
+static int bsNoteWordChar( unsigned char c )
+{
+  return isalnum( c ) || ( c == '_' );
+}
+
+
+/* The caller starts at a word boundary. Spaces inside phrases can include tabs. */
+static const char *bsNoteMatchTerm( const char *note, const char *term )
+{
+  for( ; *term ; term++ )
   {
-    c = comments[index];
-    note[index] = ( ( c >= 'A' ) && ( c <= 'Z' ) ? c + ( 'a' - 'A' ) : c );
-  }
-  note[length] = 0;
-  defectflag = 0;
-  for( index = 0 ; bsDefectWords[index] ; index++ )
-  {
-    if( strstr( note, bsDefectWords[index] ) )
+    if( *term == ' ' )
     {
-      defectflag = 1;
-      break;
+      if( ( *note != ' ' ) && ( *note != '\t' ) )
+        return 0;
+      do
+        note++;
+      while( ( *note == ' ' ) || ( *note == '\t' ) );
+    }
+    else
+    {
+      if( tolower( (unsigned char)*note ) != *term )
+        return 0;
+      note++;
     }
   }
-  free( note );
-  return defectflag;
+  return bsNoteWordChar( (unsigned char)*note ) ? 0 : note;
+}
+
+
+int bsNoteDescribesDefect( const char *comments )
+{
+  const char *note, *end;
+  int index, negated;
+
+  negated = 0;
+  for( note = comments ; note && *note ; )
+  {
+    if( !bsNoteWordChar( (unsigned char)*note ) )
+    {
+      if( ( *note != ' ' ) && ( *note != '\t' ) && ( *note != ',' ) && ( *note != '&' ) )
+        negated = 0;
+      note++;
+      continue;
+    }
+
+    end = bsNoteMatchTerm( note, "no" );
+    if( end )
+    {
+      negated = 1;
+      note = end;
+      continue;
+    }
+
+    for( index = 0 ; bsDefectTerms[index] ; index++ )
+    {
+      end = bsNoteMatchTerm( note, bsDefectTerms[index] );
+      if( end )
+        break;
+    }
+    if( end )
+    {
+      if( !negated )
+        return 1;
+      note = end;
+      continue;
+    }
+
+    /* A list such as "no cracks or yellowing" stays negated. A new clause,
+       such as "no cracks but one arm is loose", ends the negation. */
+    if( !bsNoteMatchTerm( note, "and" ) && !bsNoteMatchTerm( note, "or" ) )
+      negated = 0;
+    while( bsNoteWordChar( (unsigned char)*note ) )
+      note++;
+  }
+  return 0;
 }

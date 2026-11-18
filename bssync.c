@@ -276,7 +276,7 @@ void bsSyncAddDeltaItem( bsContext *context, bsxInventory *deltainv, bsxItem *st
 /* Compute the delta inventory, changes necessary for "inv" to become "stockinv" */
 bsxInventory *bsSyncComputeDeltaInv( bsContext *context, bsxInventory *stockinv, bsxInventory *inv, bsSyncStats *stats, int deltamode )
 {
-  int itemindex, stockitemindex, updateflags;
+  int itemindex, stockitemindex, updateflags, unreadablenote;
   size_t bitindex;
   bsxItem *item, *stockitem, *deltaitem;
   mmBitMap stockmap;
@@ -346,19 +346,23 @@ bsxInventory *bsSyncComputeDeltaInv( bsContext *context, bsxInventory *stockinv,
       stockitem = bsxFindMatchItem( stockinv, item );
 #endif
 
-    /* No match, lot is all by itself */
-    if( !( stockitem ) )
+    /* Use the usual Owl removal for an unreadable note, leaving BrickLink stock tracked. */
+    unreadablenote = ( deltamode == BS_SYNC_DELTA_MODE_BRICKOWL ) && stockitem && stockitem->unreadablecomments;
+    if( !( stockitem ) || unreadablenote )
     {
       /* Orphan lot to be deleted */
       deltaitem = bsxAddCopyItem( deltainv, item );
       bsxSetItemQuantity( deltainv, deltaitem, -item->quantity );
-      if( context->retainemptylotsflag )
+      if( context->retainemptylotsflag && !unreadablenote )
         deltaitem->flags |= BSX_ITEM_XFLAGS_TO_UPDATE | BSX_ITEM_XFLAGS_UPDATE_QUANTITY | BSX_ITEM_XFLAGS_UPDATE_STOCKROOM;
       else
         deltaitem->flags |= BSX_ITEM_XFLAGS_TO_DELETE;
       stats->deleteorphan_partcount += item->quantity;
       stats->deleteorphan_lotcount++;
-      ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "LOG: Delete orphan item%s\n", itemstringbuffer );
+      if( unreadablenote )
+        ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "LOG: Skip BrickOwl lot with unreadable public note%s\n", itemstringbuffer );
+      else
+        ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "LOG: Delete orphan item%s\n", itemstringbuffer );
       continue;
     }
 
@@ -400,6 +404,8 @@ bsxInventory *bsSyncComputeDeltaInv( bsContext *context, bsxInventory *stockinv,
       mmBitMapDirectSet( &stockmap, itemindex );
       stockitem = &stockinv->itemlist[ itemindex ];
       if( stockitem->flags & BSX_ITEM_FLAGS_DELETED )
+        continue;
+      if( ( deltamode == BS_SYNC_DELTA_MODE_BRICKOWL ) && stockitem->unreadablecomments )
         continue;
       bsSyncLogItemString( itemstringbuffer, sizeof(itemstringbuffer), stockitem );
 

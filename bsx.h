@@ -54,6 +54,8 @@ typedef struct
   char completeness;
   /* Status (char) */
   char status;
+  /* The current BrickLink public note could not be decoded. */
+  char unreadablecomments;
   /* ColorID (int) */
   int colorid;
   /* Qty (int) */

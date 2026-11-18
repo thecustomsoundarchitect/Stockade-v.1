@@ -1428,10 +1428,27 @@ static int blParseLotItem( jsonParser *parser, bsxItem *item )
 }
 
 
+static int blPublicNoteIsReadable( const char *note, int length )
+{
+  int index;
+  uint32_t state, unicode;
+
+  state = 0;
+  unicode = 0;
+  for( index = 0 ; index < length ; index++ )
+  {
+    if( !note[index] )
+      return 0;
+    ccUtf8ToUnicode( (unsigned char)note[index], &state, &unicode );
+  }
+  return state == 0;
+}
+
+
 static int blParseLotValue( jsonParser *parser, jsonToken *token, bsxItem *item )
 {
   char *name;
-  int namelen;
+  int namelen, decodedlength;
   int64_t readint;
   double readdouble;
   jsonToken *valuetoken;
@@ -1533,12 +1550,12 @@ static int blParseLotValue( jsonParser *parser, jsonToken *token, bsxItem *item 
     valuestring = &parser->codestring[ valuetoken->offset ];
     if( valuetoken->length )
     {
-      decodedstring = jsonDecodeEscapeString( valuestring, valuetoken->length, 0 );
-      if( decodedstring )
-      {
-        bsxSetItemComments( item, decodedstring, strlen( decodedstring ) );
-        free( decodedstring );
-      }
+      decodedstring = jsonDecodeEscapeString( valuestring, valuetoken->length, &decodedlength );
+      if( decodedstring && blPublicNoteIsReadable( decodedstring, decodedlength ) )
+        bsxSetItemComments( item, decodedstring, decodedlength );
+      else
+        item->unreadablecomments = 1;
+      free( decodedstring );
     }
   }
   else if( blParseCheckName( name, namelen, "remarks" ) )

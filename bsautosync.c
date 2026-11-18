@@ -418,7 +418,7 @@ static void bsAutoSyncWriteStatus( bsContext *context, int success )
 /* Publish the item problems already identified by the normal sync. */
 static void bsAutoSyncWriteQuarantine( bsContext *context )
 {
-  int index, ignoreindex, found, first;
+  int index, ignoreindex, found, first, unknown;
   unsigned char *reported;
   bsxItem *item;
   ccGrowth growth;
@@ -434,7 +434,10 @@ static void bsAutoSyncWriteQuarantine( bsContext *context )
   for( index = 0 ; index < context->inventory->itemcount ; index++ )
   {
     item = &context->inventory->itemlist[index];
-    if( ( item->flags & BSX_ITEM_FLAGS_DELETED ) || ( item->lotid < 0 ) || ( item->quantity <= 0 ) || ( item->boid != -1 ) )
+    if( ( item->flags & BSX_ITEM_FLAGS_DELETED ) || ( item->lotid < 0 ) || ( item->quantity <= 0 ) )
+      continue;
+    unknown = item->boid == -1;
+    if( !unknown && !item->unreadablecomments )
       continue;
     found = 0;
     for( ignoreindex = 0 ; ignoreindex < ledger->owlignorecount ; ignoreindex++ )
@@ -446,8 +449,12 @@ static void bsAutoSyncWriteQuarantine( bsContext *context )
         break;
       }
     }
-    ccGrowthPrintf( &growth, "%s{\"lot_id\": " CC_LLD ", \"reasons\": [\"unknown_brickowl_catalogue\"%s]}",
-      ( first ? "" : "," ), (long long)item->lotid, ( found ? ", \"sale_percentage\"" : "" ) );
+    ccGrowthPrintf( &growth, "%s{\"lot_id\": " CC_LLD ", \"reasons\": [%s%s%s%s]}",
+      ( first ? "" : "," ), (long long)item->lotid,
+      ( unknown ? "\"unknown_brickowl_catalogue\"" : "" ),
+      ( unknown && item->unreadablecomments ? ", " : "" ),
+      ( item->unreadablecomments ? "\"unreadable_public_note\"" : "" ),
+      ( found ? ", \"sale_percentage\"" : "" ) );
     first = 0;
   }
   for( ignoreindex = 0 ; ignoreindex < ledger->owlignorecount ; ignoreindex++ )
@@ -807,7 +814,7 @@ static void bsAutoSyncSetUsedGrades( bsxInventory *inv )
   for( itemindex = 0 ; itemindex < inv->itemcount ; itemindex++ )
   {
     item = &inv->itemlist[itemindex];
-    if( ( item->flags & BSX_ITEM_FLAGS_DELETED ) || ( item->condition != 'U' ) || ( item->typeid == 'S' ) )
+    if( ( item->flags & BSX_ITEM_FLAGS_DELETED ) || ( item->condition != 'U' ) || ( item->typeid == 'S' ) || item->unreadablecomments )
       continue;
     item->usedgrade = ( bsNoteDescribesDefect( item->comments ) ? 'A' : 'G' );
   }
@@ -902,7 +909,7 @@ static bsxInventory *bsAutoSyncReportChanges( bsContext *context, bsxInventory *
     old = bsxFindLotID( previous, item->lotid );
     observation = bsxFindLotID( observations, item->lotid );
     unresolved = observation && observation->quantity;
-    skipped = bsInvItemFilterFlag( context, item ) || bsAutoSyncOwlIgnored( context, item->lotid );
+    skipped = bsInvItemFilterFlag( context, item ) || item->unreadablecomments || bsAutoSyncOwlIgnored( context, item->lotid );
     if( !( old ) && skipped )
     {
       if( unresolved && observation->remarks )
@@ -915,7 +922,8 @@ static bsxInventory *bsAutoSyncReportChanges( bsContext *context, bsxInventory *
     differs = !( old ) || ( item->quantity != old->quantity ) || ( item->colorid != old->colorid ) ||
         ( item->typeid != old->typeid ) || ( item->condition != old->condition ) ||
         !( ccStrCmpEqualTest( item->id, old->id ) ) || !( bsInvPriceEqual( item->price, old->price ) ) ||
-        ( item->sale != old->sale ) || !( ccStrCmpEqualTest( item->comments, old->comments ) ) ||
+        ( item->sale != old->sale ) || ( item->unreadablecomments != old->unreadablecomments ) ||
+        !( ccStrCmpEqualTest( item->comments, old->comments ) ) ||
         !( ccStrCmpEqualTest( item->remarks, old->remarks ) ) || ( item->bulk != old->bulk ) ||
         !( bsInvPriceEqual( item->mycost, old->mycost ) ) || !( bsInvItemTierEqual( item, old ) );
     if( differs || ( unresolved && !( skipped ) ) )
@@ -983,10 +991,10 @@ static void bsAutoSyncWriteReport( bsContext *context, bsxInventory *changed, in
     item = &changed->itemlist[index];
     target = bsxFindLotID( context->inventory, item->lotid );
     owl = 0;
-    if( owlinv && target && ( target->boid >= 0 ) && !( bsAutoSyncLotUncertain( context->autosyncledger, target->lotid ) ) )
+    if( owlinv && target && ( target->boid >= 0 ) && !target->unreadablecomments && !( bsAutoSyncLotUncertain( context->autosyncledger, target->lotid ) ) )
       owl = bsxFindBoidColorConditionLotID( owlinv, target->boid, target->colorid, target->condition, target->lotid );
     confirmed = target && bsAutoSyncReportMatches( target, owl );
-    skipped = bsInvItemFilterFlag( context, item ) && !( bsAutoSyncOwlIgnored( context, item->lotid ) );
+    skipped = ( bsInvItemFilterFlag( context, item ) || item->unreadablecomments ) && !( bsAutoSyncOwlIgnored( context, item->lotid ) );
     if( !( confirmed ) && ( item->extid & 1 ) )
       continue;
     if( !( wrote ) )

@@ -800,13 +800,29 @@ char *jsonEncodeEscapeString( char *string, int length, int *retlength )
 
 
 
+static int jsonDecodeHexQuad( const char *string, uint32_t *unicode )
+{
+  int index, digit;
+
+  *unicode = 0;
+  for( index = 0 ; index < 4 ; index++ )
+  {
+    digit = ccCharHexBase( string[index] );
+    if( digit < 0 )
+      return 0;
+    *unicode = ( *unicode << 4 ) | digit;
+  }
+  return 1;
+}
+
+
 /* Build string with decoded escape chars, returned string must be free()'d */
 char *jsonDecodeEscapeString( char *string, int length, int *retlength )
 {
   int utf8length;
   char *dst, *dstbase;
   unsigned char c;
-  uint32_t unicode;
+  uint32_t unicode, low;
 
   dstbase = malloc( length + 1 );
   for( dst = dstbase ; length ; length--, string++ )
@@ -839,18 +855,22 @@ char *jsonDecodeEscapeString( char *string, int length, int *retlength )
       else if( c == 'u' )
       {
         length -= 4;
-        if( length < 0 )
+        if( ( length < 0 ) || !jsonDecodeHexQuad( string + 1, &unicode ) )
           goto error;
-        string++;
-        unicode  = ccCharHexBase( string[3] );
-        unicode |= ccCharHexBase( string[2] ) << 4;
-        unicode |= ccCharHexBase( string[1] ) << 8;
-        unicode |= ccCharHexBase( string[0] ) << 12;
+        string += 4;
+        if( ( unicode >= 0xd800 ) && ( unicode <= 0xdbff ) )
+        {
+          if( ( length < 6 ) || ( string[1] != '\\' ) || ( string[2] != 'u' ) ||
+              !jsonDecodeHexQuad( string + 3, &low ) || ( low < 0xdc00 ) || ( low > 0xdfff ) )
+            goto error;
+          unicode = 0x10000 + ( ( unicode - 0xd800 ) << 10 ) + ( low - 0xdc00 );
+          length -= 6;
+          string += 6;
+        }
         utf8length = ccUnicodeToUtf8( dst, unicode );
         if( !( utf8length ) )
           goto error;
         dst += utf8length;
-        string += 3;
       }
       else
         goto error;

@@ -1,8 +1,4 @@
-"""Used grade tests (Patch 2). Run:  python3 tests/test_usedgrade.py
-
-The list of words that make a used item Acceptable is empty until Tammy picks the words
-(bsevalgrade.c), so these tests cover Good, New and sets. Acceptable is not tested yet.
-"""
+"""Used grade tests (Patch 2). Run: python3 tests/test_usedgrade.py."""
 import test_autosync
 from test_autosync import check, start, in_step
 
@@ -56,6 +52,64 @@ def test_existing_owl_lots_are_corrected():
         writes = e.bo.server.writes()
         check(len(writes) == 1 and writes[0][1] == "/v1/inventory/update", "Brick Owl writes: %r" % writes)
         check(e.bl.server.writes() == [], "wrote to BrickLink")
+        in_step(e)
+    finally:
+        e.cleanup()
+
+
+def test_used_notes_respect_exact_terms_and_negation():
+    e, _ = start()
+    try:
+        cases = (
+            ("NO CRACKS", "usedg"),
+            ("NO YELLOWING", "usedg"),
+            ("ONE ARM IS LOOSE BUT NO CRACKS", "useda"),
+            ("No hairline cracks, scratches or yellowing", "usedg"),
+            ("No cracks but slight yellowing", "useda"),
+            ("No cracks. Scratches on one side", "useda"),
+            ("Figure wearing a hat with an unbroken shield", "usedg"),
+            ("Some surface  ware", "useda"),
+            ("A few scrathches", "useda"),
+            ("Sticker coming up at one edge", "useda"),
+            ("Corner lifted", "useda"),
+        )
+        lots = [
+            (e.bl.add_lot("3003", 5, 1.0, cond="U", description=note), note, expected)
+            for note, expected in cases
+        ]
+        e.bo.catalog["75192-1"] = ("Set", 400001)
+        new = e.bl.add_lot("3005", 5, 1.0, cond="N", description="cracks")
+        aset = e.bl.add_lot("75192-1", 1, 500.0, cond="U", color=0, itemtype="SET", description="cracks")
+        status = e.cycle()
+        check(status["result"] == "ok", "cycle failed: " + status["error"])
+        for lot, note, expected in lots:
+            actual = grade(e, lot)
+            check(actual == expected, "%r: expected %s, got %s" % (note, expected, actual))
+        check(grade(e, new) == "new", "a New lot was graded by the used rule")
+        check(grade(e, aset) == "usedc", "a set was graded by the used rule")
+        check(e.bl.server.writes() == [], "grading wrote to BrickLink")
+        in_step(e)
+    finally:
+        e.cleanup()
+
+
+def test_existing_used_lot_returns_to_good_after_note_correction():
+    e, (_, lot) = start()
+    try:
+        owl_lot = e.bo.find(lot)["lot_id"]
+        check(grade(e, lot) == "usedg", "existing lot did not start as Good")
+        e.bl.lots[lot]["description"] = "ONE ARM IS LOOSE BUT NO CRACKS"
+        check(e.cycle()["result"] == "ok", "cycle failed with defect note")
+        check(grade(e, lot) == "useda", "existing lot did not change to Acceptable")
+
+        corrected_note = "NO CRACKS OR YELLOWING"
+        e.bl.lots[lot]["description"] = corrected_note
+        check(e.cycle()["result"] == "ok", "cycle failed with corrected note")
+        corrected = e.bo.find(lot)
+        check(corrected["full_con"] == "usedg", "corrected lot did not return to Good")
+        check(corrected["lot_id"] == owl_lot, "grading replaced the existing listing")
+        check(corrected["public_note"] == corrected_note, "the corrected public note was not copied")
+        check(e.bl.server.writes() == [], "grading wrote to BrickLink")
         in_step(e)
     finally:
         e.cleanup()

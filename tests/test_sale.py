@@ -1,5 +1,7 @@
 """Sale percentage tests (Patch 4). Run:  python3 tests/test_sale.py"""
 import json
+from pathlib import Path
+
 import test_autosync
 from test_autosync import check, start, in_step
 
@@ -90,6 +92,44 @@ def test_quarantine_lists_catalogue_and_sale_problems():
             snapshot = json.load(f)
         check(snapshot["items"] == [{"lot_id": a, "reasons": ["sale_percentage"]}], "resolved or repeated problem items: %r" % snapshot)
         check(e.bo.qty(unknown) == 4 and e.bo.find(a) is None, "catalogue or sale skip behavior changed")
+    finally:
+        e.cleanup()
+
+
+def test_unreadable_public_notes_skip_only_their_lots_until_corrected():
+    e, (healthy, held) = start()
+    try:
+        prior_owl_lot = e.bo.find(held)["lot_id"]
+        e.bl.lots[held]["description"] = "\ud800"
+        new_held = e.bl.add_lot("3003", 4, 1.0, cond="U", description="Broken encoding\x00")
+        valid_note = "From a sealed set \U0001f600"
+        e.bl.lots[healthy].update(quantity=11, description=valid_note)
+
+        check(e.cycle()["result"] == "ok", "a bad note failed the cycle")
+        check(e.bl.qty(held) == 5 and e.bl.qty(new_held) == 4, "held BrickLink stock changed")
+        check(e.bo.lots[prior_owl_lot]["qty"] == 0, "existing Owl listing was not set to zero")
+        check(e.bo.find(new_held) is None, "new held lot was listed on Owl")
+        check(e.bo.qty(healthy) == 11, "healthy lot did not sync")
+        check(e.bo.find(healthy)["public_note"] == valid_note, "valid Unicode note did not sync")
+        quarantine = Path(e.path("data", "quarantine.json"))
+        reasons = {item["lot_id"]: item["reasons"] for item in json.loads(quarantine.read_text())["items"]}
+        check(reasons == {held: ["unreadable_public_note"], new_held: ["unreadable_public_note"]},
+              "incorrect quarantine reasons: %r" % reasons)
+
+        order = e.bl.sale({held: 2})
+        check(e.cycle()["result"] == "ok", "sale on held BrickLink lot failed")
+        check(e.bl.qty(held) == 3 and e.bo.find(held) is None, "sale reopened the held lot")
+        check(Path(e.path("data", "orders", "bricklink-%d.bsx" % order)).is_file(), "held lot order was not saved")
+
+        e.bl.lots[held]["description"] = "From a sealed set"
+        e.bl.lots[new_held]["description"] = ""
+        check(e.cycle()["result"] == "ok", "corrected notes did not sync")
+        check(e.bo.qty(held) == 3 and e.bo.qty(new_held) == 4, "corrected lots did not return at current quantities")
+        check(e.bo.find(held)["public_note"] == "From a sealed set", "corrected note did not sync")
+        check(json.loads(quarantine.read_text())["items"] == [], "corrected lots stayed in quarantine")
+        check(e.bl.server.writes() == [], "quarantine wrote to BrickLink")
+        check(not Path(e.path("data", "bricksync.owlignore.txt")).exists(), "quarantine wrote a permanent hold")
+        in_step(e)
     finally:
         e.cleanup()
 
