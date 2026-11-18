@@ -338,10 +338,10 @@ int translationTableRegisterEntry( translationTable *table, char bltypeid, const
     return 0;
   for( i = 0 ; ; i++ )
   {
-    if( i == TRANSLATION_BLID_LENGTH )
-      return 0;
     if( !( blid[i] ) )
       break;
+    if( i == TRANSLATION_BLID_LENGTH )
+      return 0;
     storageelement.element.blpack[i] = blid[i];
   }
   for( ; i < TRANSLATION_BLID_LENGTH ; i++ )

@@ -452,6 +452,10 @@ typedef struct
   int autosyncalertsent;
   struct bsAutoSyncLedger *autosyncledger;
   char autosyncerror[512];
+#if defined(__APPLE__)
+  int dailybackupcycle;
+  char dailybackuppruneday[11];
+#endif
 
 } bsContext;
 

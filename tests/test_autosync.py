@@ -480,17 +480,119 @@ def _owl_sale_with_bricklink_failure(mode, expect_puts):
 
 
 def test_bricklink_deduction_reply_lost_applied():
-    # BrickLink applied the deduction but the reply never arrived: it must not be sent again
-    _owl_sale_with_bricklink_failure("drop_after", ["drop_after"])
+    _uncertain_deduction_holds_lot("drop_after", 10)
 
 
 def test_bricklink_deduction_lost_not_applied():
-    # The request never reached BrickLink: it must be sent again, once
-    _owl_sale_with_bricklink_failure("drop_before", ["drop_before", "ok"])
+    _uncertain_deduction_holds_lot("drop_before", 8)
 
 
 def test_bricklink_deduction_rejected():
-    _owl_sale_with_bricklink_failure("500", ["500", "ok"])
+    _uncertain_deduction_holds_lot("500", 10)
+
+
+def test_bricklink_deduction_http_500_stays_uncertain():
+    _uncertain_deduction_holds_lot("500", 8)
+
+
+def _uncertain_deduction_holds_lot(mode, edited_quantity):
+    e, (a, b) = start()
+    try:
+        e.bo.sale({a: 2})
+        e.bl.server.fail("PUT", r"/inventories/\d+$", mode, 1)
+        check(e.cycle()["result"] == "failed", "the unconfirmed sale was not reported")
+        check(e.status()["pending_bricklink_deductions"] == 1, "the sale was not kept pending")
+        check(e.bo.find(a) is None, "the uncertain lot remains on Brick Owl")
+        with e.bl.lock:
+            e.bl.lots[a]["quantity"] = edited_quantity
+            e.bl.lots[a]["unit_price"] = "3.0000"
+            e.bl.lots[b]["quantity"] = 11
+        check(e.cycle()["result"] == "failed", "uncertainty was incorrectly resolved")
+        check(e.bl.qty(a) == edited_quantity, "the uncertain deduction was sent again")
+        check(e.bo.find(a) is None, "the uncertain lot returned to Brick Owl")
+        check(e.bo.qty(b) == 11, "an unrelated lot did not sync")
+        check(bl_quantity_writes(e) == [(a, -2, mode)], "unexpected BrickLink writes: %r" % bl_quantity_writes(e))
+        check(e.status()["pending_bricklink_deductions"] == 1, "the uncertain sale disappeared")
+        e.stop()
+        e.start()
+        check(e.status()["result"] == "failed", "restart incorrectly resolved the uncertainty")
+        check(e.bl.qty(a) == edited_quantity and e.bo.find(a) is None, "restart changed the uncertain lot")
+        check(e.status()["pending_bricklink_deductions"] == 1, "restart lost the pending sale")
+        check(bl_quantity_writes(e) == [(a, -2, mode)], "restart repeated the deduction")
+    finally:
+        e.cleanup()
+
+
+def test_uncertain_sale_holds_later_sale_on_same_lot():
+    e, (a, b) = start()
+    try:
+        e.bo.sale({a: 2})
+        e.bo.sale({a: 1})
+        e.bl.server.fail("PUT", r"/inventories/\d+$", "drop_before", 1)
+        check(e.cycle()["result"] == "failed", "the first sale was not pending")
+        check(e.cycle()["result"] == "failed", "the sales were not kept pending")
+        check(e.bl.qty(a) == 10 and e.bo.find(a) is None, "the affected lot was not skipped")
+        check(e.status()["pending_bricklink_deductions"] == 2, "both sales were not kept pending")
+        check(bl_quantity_writes(e) == [(a, -2, "drop_before")], "a later sale was sent while the lot was uncertain")
+    finally:
+        e.cleanup()
+
+
+def test_uncertain_sale_holds_missing_bricklink_lot_on_owl():
+    e, (a, b) = start()
+    try:
+        e.bo.sale({a: 2})
+        e.bl.server.fail("PUT", r"/inventories/\d+$", "drop_before", 1)
+        check(e.cycle()["result"] == "failed", "the sale was not pending")
+        with e.bl.lock:
+            del e.bl.lots[a]
+            e.bl.lots[b]["quantity"] = 11
+        check(e.cycle()["result"] == "failed", "the missing lot was incorrectly confirmed")
+        check(e.bo.find(a) is None, "the missing BrickLink lot remains on Brick Owl")
+        check(e.bo.qty(b) == 11, "the unrelated lot did not sync")
+        check(e.status()["pending_bricklink_deductions"] == 1, "the sale was not kept pending")
+    finally:
+        e.cleanup()
+
+
+def test_uncertain_sale_holds_unmapped_missing_bricklink_lot_on_owl():
+    e, (a, b) = start()
+    try:
+        with e.bo.lock:
+            owl_lot_id = e.bo.find(a)["lot_id"]
+        e.bo.sale({a: 2})
+        with e.bo.lock:
+            affected_lot = dict(e.bo.lots[owl_lot_id])
+            unrelated_lot = dict(e.bo.find(b))
+            unrelated_lot_id = unrelated_lot["lot_id"] + 100
+        e.bl.server.fail("PUT", r"/inventories/\d+$", "drop_before", 1)
+        check(e.cycle()["result"] == "failed", "the sale was not pending")
+        with e.bo.lock:
+            # Restore the listing without its external ID to model a lost mapping.
+            e.bo.lots[owl_lot_id] = affected_lot
+            e.bo.lots[owl_lot_id]["external_id"] = ""
+            unrelated_lot["lot_id"] = unrelated_lot_id
+            unrelated_lot["external_id"] = ""
+            e.bo.lots[unrelated_lot_id] = unrelated_lot
+        with e.bl.lock:
+            del e.bl.lots[a]
+            e.bl.lots[b]["quantity"] = 11
+        check(e.cycle()["result"] == "failed", "the missing lot was incorrectly confirmed")
+        with e.bo.lock:
+            owl = e.bo.lots.get(owl_lot_id)
+            check(owl is not None and owl["qty"] == 0, "the identifiable affected Owl lot was not skipped")
+            check(e.bo.lots[unrelated_lot_id]["qty"] == 5, "an unrelated unmapped Owl lot was changed")
+        check(e.bo.qty(b) == 11, "the unrelated mapped lot did not sync")
+        check(e.status()["pending_bricklink_deductions"] == 1, "the sale was not kept pending")
+        e.stop()
+        e.start()
+        with e.bo.lock:
+            owl = e.bo.lots.get(owl_lot_id)
+            check(owl is not None and owl["qty"] == 0, "restart restored the affected Owl lot")
+            check(e.bo.lots[unrelated_lot_id]["qty"] == 5, "restart changed the unrelated unmapped Owl lot")
+        check(e.status()["pending_bricklink_deductions"] == 1, "restart lost the pending sale")
+    finally:
+        e.cleanup()
 
 
 def test_uncertain_lost_reply_does_not_deduct_again():
@@ -503,7 +605,7 @@ def test_uncertain_lost_reply_does_not_deduct_again():
             e.bl.lots[a]["quantity"] = 20
         check(e.cycle()["result"] == "failed", "the uncertain deduction should remain pending")
         check(e.bl.qty(a) == 20, "stock was deducted again after an uncertain reply")
-        check(e.bo.qty(a) == 20, "the live manual stock was not preserved on Brick Owl")
+        check(e.bo.find(a) is None, "the uncertain lot remains on Brick Owl")
         check(e.status()["pending_bricklink_deductions"] == 1, "the uncertain sale record disappeared")
         check(bl_quantity_writes(e) == [(a, -2, "drop_after")], "BrickLink was written again: %r" % bl_quantity_writes(e))
         check(e.cycle()["result"] == "failed", "the uncertain deduction should still remain pending")
@@ -574,9 +676,9 @@ def test_bricklink_deduction_reply_lost_then_bricklink_sale():
         e.bl.server.fail("PUT", r"/inventories/\d+$", "drop_after", 1)   # applied: BrickLink 8
         check(e.cycle()["result"] == "failed", "cycle should be counted as failed")
         e.bl.sale({a: 3})                                               # BrickLink 5
-        check(e.cycle()["result"] == "ok", "recovery cycle failed: " + e.status()["error"])
-        check(e.bl.qty(a) == 5 and e.bo.qty(a) == 5, "BrickLink %r, Brick Owl %r, expected 5 and 5" % (e.bl.qty(a), e.bo.qty(a)))
-        in_step(e)
+        check(e.cycle()["result"] == "failed", "the uncertain deduction should remain pending")
+        check(e.bl.qty(a) == 5 and e.bo.find(a) is None, "the uncertain lot was not skipped")
+        check(e.status()["pending_bricklink_deductions"] == 1, "the uncertain sale disappeared")
     finally:
         e.cleanup()
 
@@ -594,10 +696,10 @@ def test_killed_after_deduction_sent_then_restart():
         e.kill()                                   # dies right after BrickLink applied it
         check(e.bl.qty(a) == 8, "BrickLink holds %r" % e.bl.qty(a))
         e.start()
-        check(e.status()["result"] == "ok", "cycle after restart failed: " + e.status()["error"])
-        check(e.bl.qty(a) == 8 and e.bo.qty(a) == 8, "after restart: BrickLink %r, Brick Owl %r, expected 8 and 8" % (e.bl.qty(a), e.bo.qty(a)))
+        check(e.status()["result"] == "failed", "restart incorrectly resolved the uncertain deduction")
+        check(e.bl.qty(a) == 8 and e.bo.find(a) is None, "restart did not skip the uncertain lot")
         check(len(e.bl.server.writes()) == 1, "BrickLink was written again: %r" % bl_quantity_writes(e))
-        in_step(e)
+        check(e.status()["pending_bricklink_deductions"] == 1, "restart lost the uncertain sale")
     finally:
         e.cleanup()
 
@@ -620,6 +722,44 @@ def test_killed_mid_cycle_at_several_points():
             in_step(e)
         finally:
             e.cleanup()
+
+
+def test_restart_owl_read_failure_keeps_sale_pending_until_retry():
+    e, (a, b) = start()
+    try:
+        e.stop()
+        e.bo.sale({a: 2})
+        e.bo.server.fail("GET", r"/v1/inventory/list$", "500", 1000)
+        e.start()
+        check(e.status()["result"] == "failed", "startup should fail when Brick Owl inventory cannot be read")
+        check(e.bl.server.writes() == [] and e.bo.server.writes() == [], "a store was written before the Brick Owl read")
+        check(e.status()["pending_bricklink_deductions"] == 1, "the sale was not kept pending")
+        check(e.bl.qty(a) == 10, "BrickLink was changed before the Brick Owl read")
+        e.bo.server.fails.clear()
+        check(e.cycle()["result"] == "ok", "retry failed: " + e.status()["error"])
+        check(bl_quantity_writes(e) == [(a, -2, "ok")], "sale was not deducted exactly once: %r" % bl_quantity_writes(e))
+        in_step(e)
+    finally:
+        e.cleanup()
+
+
+def test_restart_order_during_owl_read_is_processed_before_deduction():
+    e, (a, b) = start()
+    try:
+        e.stop()
+        e.bo.sale({a: 2})
+        writes_during_read = []
+        def sale_during_read():
+            writes_during_read.extend(bl_quantity_writes(e))
+            e.bo.sale({b: 1})
+        e.bo.on_inventory_read = sale_during_read
+        e.start()
+        check(e.status()["result"] == "ok", "startup failed: " + e.status()["error"])
+        check(writes_during_read == [], "BrickLink was written before the startup Brick Owl read: %r" % writes_during_read)
+        check(sorted(bl_quantity_writes(e)) == sorted([(a, -2, "ok"), (b, -1, "ok")]), "sales were not deducted exactly once: %r" % bl_quantity_writes(e))
+        in_step(e)
+    finally:
+        e.cleanup()
 
 
 def test_restart_reads_live_and_keeps_manual_edits():
@@ -671,6 +811,173 @@ def test_timer_runs_without_any_command():
         check(e.bo.qty(a) == 33 and e.bo.qty(c) == 7, "the timer did not sync: Brick Owl %r and %r" % (e.bo.qty(a), e.bo.qty(c)))
         check(e.bl.server.writes() == [], "wrote to BrickLink")
         in_step(e)
+    finally:
+        e.cleanup()
+
+
+
+def test_daily_backup_archives_orders_and_retains_ten_days():
+    import tarfile
+    from pathlib import Path
+
+    base = int(time.time()) - 3 * 86400
+    e = Env()
+    Path(e.path("data", "test.dailybackup-time")).write_text(str(base))
+    a = e.bl.add_lot("3001", 10, 1.25)
+    b = e.bl.add_lot("3002", 5, 0.50)
+
+    def wait_backup():
+        deadline = time.monotonic() + 30
+        expected = (e.proc.pid, e.status()["cycle"])
+        while time.monotonic() < deadline:
+            try:
+                if tuple(map(int, Path(e.path("data", "test.dailybackup-cycle")).read_text().split())) == expected:
+                    return
+            except (OSError, ValueError):
+                pass
+            time.sleep(0.05)
+        raise AssertionError("daily backup check did not finish: " + e.output()[-2000:])
+
+    def archive(timestamp):
+        return Path(e.path("data", "backups", "daily-" + time.strftime("%Y-%m-%d", time.localtime(timestamp)) + ".tar"))
+
+    try:
+        e.start()
+        wait_backup()
+        first = archive(base)
+        check(first.is_file(), "the first daily archive was not created")
+        first_data = first.read_bytes()
+        check(e.cycle()["result"] == "ok", "repeat cycle failed")
+        wait_backup()
+        check(first.read_bytes() == first_data, "the same day's archive was replaced")
+        Path(e.path("data", "stockade-sync-report.txt")).write_text("Existing sync report\n")
+        bl_order = e.bl.sale({a: 2})
+        bo_order = e.bo.sale({b: 1})
+        next_day = base + 86400
+        backups = first.parent
+        old = backups / "daily-2001-01-01.tar"
+        boundary = backups / "daily-2001-01-02.tar"
+        newer = backups / "daily-2001-01-03.tar"
+        legacy = backups / "2001-01-01" / "00001.bsx"
+        legacy.parent.mkdir(exist_ok=True)
+        for path, age in ((old, 10 * 86400 + 1), (boundary, 10 * 86400), (newer, 10 * 86400 - 1), (legacy, 20 * 86400)):
+            path.write_bytes(b"existing backup")
+            os.utime(path, (next_day - age, next_day - age))
+        Path(e.path("data", "test.dailybackup-time")).write_text(str(next_day))
+        check(e.cycle()["result"] == "ok", "sales or next day backup cycle failed")
+        wait_backup()
+        second = archive(next_day)
+        check(second.is_file(), "the next daily archive was not created")
+        expected = {"data/bricksync.conf.txt", "data/bricksync.state", "data/bricksync.inventory.bsx",
+                    "data/quarantine.json", "data/stockade-sync-report.txt",
+                    "data/orders/bricklink-%d.bsx" % bl_order, "data/orders/brickowl-%d.bsx" % bo_order}
+        with tarfile.open(second) as saved:
+            members = {item.name.removeprefix("./"): item for item in saved.getmembers() if item.isfile()}
+            check(expected <= set(members), "daily archive is missing records: %r" % (expected - set(members)))
+            for name in expected:
+                check(saved.extractfile(members[name]).read() == Path(e.path(*name.split("/"))).read_bytes(),
+                      "daily archive does not match the saved record: " + name)
+        check(not old.exists(), "daily archive older than ten days was retained")
+        check(boundary.exists() and newer.exists() and legacy.exists(), "retention removed a kept or existing backup")
+        check(Path(e.path("data", "orders", "bricklink-%d.bsx" % bl_order)).is_file(), "BrickLink order file was removed")
+        check(Path(e.path("data", "orders", "brickowl-%d.bsx" % bo_order)).is_file(), "Brick Owl order file was removed")
+        check(e.bl.qty(a) == 8 and e.bl.qty(b) == 4, "backup changed sale syncing")
+    finally:
+        e.cleanup()
+
+
+
+def test_daily_backup_failure_retries_without_stopping_sales():
+    from pathlib import Path
+
+    base = int(time.time()) - 3 * 86400
+    e = Env()
+    Path(e.path("data", "test.dailybackup-time")).write_text(str(base))
+    a = e.bl.add_lot("3001", 10, 1.25)
+    b = e.bl.add_lot("3002", 5, 0.50)
+    day = time.strftime("%Y-%m-%d", time.localtime(base))
+    backup = Path(e.path("data", "backups", "daily-" + day + ".tar"))
+    blocker = backup.with_name("." + backup.name + ".tmp")
+    blocker.mkdir(parents=True)
+    try:
+        e.start()
+        deadline = time.monotonic() + 30
+        while "Daily backup: could not replace temporary archive" not in e.output():
+            check(time.monotonic() < deadline, "backup failure was not reported")
+            time.sleep(0.05)
+        e.bl.sale({a: 2})
+        e.bo.sale({b: 1})
+        check(e.cycle()["result"] == "ok", "backup failure stopped sale syncing")
+        check(e.bl.qty(a) == 8 and e.bo.qty(a) == 8 and e.bl.qty(b) == 4 and e.bo.qty(b) == 4,
+              "sale quantities were incorrect while backup failed")
+        blocker.rmdir()
+        check(e.cycle()["result"] == "ok", "cycle after backup failure failed")
+        deadline = time.monotonic() + 30
+        while not backup.is_file():
+            check(time.monotonic() < deadline, "daily backup was not retried")
+            time.sleep(0.05)
+        check(bl_quantity_writes(e) == [(b, -1, "ok")], "backup retry repeated a sale deduction")
+    finally:
+        e.cleanup()
+
+
+def test_sync_report_confirms_changes_and_lists_skipped_lot():
+    e, (a, b) = start()
+    try:
+        e.bl.lots[a]["quantity"] = 14
+        added = e.bl.add_lot("3003", 7, 1.00)
+        skipped = e.bl.add_lot("3004", 4, 1.00)
+        e.bl.lots[skipped]["remarks"] = "~"
+        check(e.cycle()["result"] == "ok", "the update failed")
+        with open(e.path("data", "stockade-sync-report.txt")) as report:
+            text = report.read()
+        check("Confirmed: BrickLink lot %d," % a in text, "the updated lot was not confirmed")
+        check("Confirmed: BrickLink lot %d," % added in text, "the new lot was not confirmed")
+        check("Skipped: BrickLink lot %d," % skipped in text, "the intentionally skipped lot was not listed correctly")
+        check("Problem: BrickLink lot %d," % skipped not in text, "the intentionally skipped lot was reported as a problem")
+        check("quantity 14" in next(line for line in text.splitlines() if line.startswith("Confirmed: BrickLink lot %d," % a)), "the updated quantity was not reported")
+        check("quantity 7" in next(line for line in text.splitlines() if line.startswith("Confirmed: BrickLink lot %d," % added)), "the new quantity was not reported")
+        check(e.bo.qty(a) == 14 and e.bo.qty(added) == 7, "confirmed quantities do not match Brick Owl")
+        check(e.bo.find(skipped) is None, "the skipped lot appeared on Brick Owl")
+        check(e.bl.server.writes() == [], "the report wrote to BrickLink")
+        check(e.cycle()["result"] == "ok", "the repeat cycle failed")
+        with open(e.path("data", "stockade-sync-report.txt")) as report:
+            check(report.read() == text, "an unchanged skipped lot was reported again")
+        e.bl.lots[skipped]["quantity"] = 5
+        check(e.cycle()["result"] == "ok", "the later update failed")
+        with open(e.path("data", "stockade-sync-report.txt")) as report:
+            updated = report.read()
+        rows = [line for line in updated.splitlines() if line.startswith("Skipped: BrickLink lot %d," % skipped)]
+        check(len(rows) == 2 and "quantity 5" in rows[-1], "a later change to the skipped lot was not reported")
+    finally:
+        e.cleanup()
+
+
+def test_sync_report_does_not_confirm_an_unapplied_update():
+    e, (a, b) = start()
+    try:
+        handle = e.bo.server.handler
+        def acknowledge_without_update(method, path, query, body):
+            if path == "/v1/inventory/update":
+                return 200, json.dumps({"status": "success"})
+            return handle(method, path, query, body)
+        e.bo.server.handler = acknowledge_without_update
+        e.bl.lots[a]["quantity"] = 14
+        check(e.cycle()["result"] == "ok", "the update cycle failed")
+        with open(e.path("data", "stockade-sync-report.txt")) as report:
+            text = report.read()
+        check(e.bo.qty(a) == 10, "the fake store applied the injected update")
+        check("Problem: BrickLink lot %d," % a in text, "the unapplied update was not reported")
+        check("Confirmed: BrickLink lot %d," % a not in text, "the unapplied update was falsely confirmed")
+        e.bo.server.handler = handle
+        check(e.cycle()["result"] == "ok", "the retry failed")
+        with open(e.path("data", "stockade-sync-report.txt")) as report:
+            retried = report.read()
+        check(e.bo.qty(a) == 14, "the retry did not update Brick Owl")
+        check("Confirmed: BrickLink lot %d," % a in retried, "the successful retry was not confirmed")
+        check(e.cycle()["result"] == "ok", "the cycle after the retry failed")
+        with open(e.path("data", "stockade-sync-report.txt")) as report:
+            check(report.read() == retried, "the resolved lot was reported again")
     finally:
         e.cleanup()
 

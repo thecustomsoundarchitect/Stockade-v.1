@@ -1,4 +1,5 @@
 """Sale percentage tests (Patch 4). Run:  python3 tests/test_sale.py"""
+import json
 import test_autosync
 from test_autosync import check, start, in_step
 
@@ -26,7 +27,16 @@ def test_sale_is_copied_changed_and_cleared():
             updates = owl_updates(e)
             check(len(updates) == 1 and ("sale_percent=%d" % percent) in updates[0] and "price=" not in updates[0].replace("sale_percent", ""),
                   "Brick Owl updates: %r" % updates)
-            check(owl_reads(e) == 2, "Brick Owl should be read back once after the sale was sent, reads: %d" % owl_reads(e))
+            check(owl_reads(e) == 3, "Brick Owl should be read back for the sale and sync report, reads: %d" % owl_reads(e))
+            with e.bo.server.lock:
+                sequence = [(entry[0], entry[1]) for entry in e.bo.server.log
+                            if entry[1] in ("/v1/inventory/list", "/v1/inventory/update")]
+            check(sequence == [("GET", "/v1/inventory/list"), ("POST", "/v1/inventory/update"),
+                               ("GET", "/v1/inventory/list"), ("GET", "/v1/inventory/list")],
+                  "expected sale readback followed by report confirmation: %r" % (sequence,))
+            with open(e.path("data", "stockade-sync-report.txt")) as f:
+                latest_report = f.read().strip().split("\n\n")[-1]
+            check("Confirmed: BrickLink lot %d," % a in latest_report, "sale update was not confirmed in the report")
             check(e.bo.find(b)["sale_percent"] == 0, "another lot got a sale")
         check(e.bl.server.writes() == [], "wrote to BrickLink")
         e.bo.server.clear_log()
@@ -55,6 +65,55 @@ def test_new_lot_with_sale_and_existing_owl_sale():
         e.cleanup()
 
 
+def test_quarantine_lists_catalogue_and_sale_problems():
+    e, (a, b) = start()
+    try:
+        unknown = e.bl.add_lot("unknown123", 4, 1.0)
+        e.bl.lots[a]["sale_rate"] = 25
+        e.bl.lots[b]["quantity"] = 9
+        e.bo.ignore_sale = True
+        check(e.cycle()["result"] == "ok", "cycle failed: " + e.status()["error"])
+        with open(e.path("data", "quarantine.json")) as f:
+            snapshot = json.load(f)
+        items = {item["lot_id"]: item["reasons"] for item in snapshot["items"]}
+        check(items == {a: ["sale_percentage"], unknown: ["unknown_brickowl_catalogue"]}, "wrong problem items: %r" % items)
+        with open(e.path("data", "stockade-sync-report.txt")) as f:
+            report = f.read()
+        check("Problem: BrickLink lot %d," % a in report, "the sale percentage failure was not reported as a problem")
+        check(e.bo.find(a) is None and e.bo.find(unknown) is None and e.bo.qty(b) == 9, "problem or unrelated Owl lot was wrong")
+        check(e.bl.qty(a) == 10 and e.bl.qty(unknown) == 4 and e.bl.qty(b) == 9, "BrickLink quantities changed")
+
+        e.bo.ignore_sale = False
+        e.bo.catalog["unknown123"] = ("Part", 500001)
+        check(e.cycle()["result"] == "ok", "cycle after catalogue update failed")
+        with open(e.path("data", "quarantine.json")) as f:
+            snapshot = json.load(f)
+        check(snapshot["items"] == [{"lot_id": a, "reasons": ["sale_percentage"]}], "resolved or repeated problem items: %r" % snapshot)
+        check(e.bo.qty(unknown) == 4 and e.bo.find(a) is None, "catalogue or sale skip behavior changed")
+    finally:
+        e.cleanup()
+
+
+def test_fourteen_character_item_mapping_is_saved():
+    e, (a, b) = start()
+    try:
+        item_no = "12345678901234"
+        e.bo.catalog[item_no] = ("Part", 500003)
+        first = e.bl.add_lot(item_no, 2, 1.0)
+        check(e.cycle()["result"] == "ok" and e.bo.qty(first) == 2, "first lot did not sync")
+        e.stop()
+        e.start()
+        e.bo.server.clear_log()
+        second = e.bl.add_lot(item_no, 3, 1.0, color=12)
+        check(e.cycle()["result"] == "ok" and e.bo.qty(second) == 3, "second lot did not sync")
+        with e.bo.server.lock:
+            lookups = [entry for entry in e.bo.server.log if entry[1] == "/v1/catalog/id_lookup" and item_no in entry[2]]
+        check(not lookups, "saved mapping was not reused: %r" % (lookups,))
+        check(e.bl.server.writes() == [], "wrote to BrickLink")
+    finally:
+        e.cleanup()
+
+
 def test_sale_not_shown_by_owl_is_ignored_forever():
     for new_lot, percent in ((False, 25), (True, 25), (False, 0)):
         e, (a, b) = start()
@@ -64,16 +123,21 @@ def test_sale_not_shown_by_owl_is_ignored_forever():
             if percent == 0:
                 e.bo.find(a)["sale_percent"] = 40
             e.bl.lots[a]["sale_rate"] = percent
+            e.bl.lots[a]["remarks"] = "Bin A"
             original = dict(e.bl.lots[a])
+            marked = dict(original, remarks=original["remarks"] + "~")
             e.bl.lots[b]["quantity"] = 9
             e.bo.ignore_sale = True
             status = e.cycle()
             check(status["result"] == "ok" and status["consecutive_failures"] == 0, "a sale Brick Owl does not show must not fail the sync: %r" % status)
             check(e.bo.find(a) is None, "the ignored lot is still on Brick Owl")
-            check(e.bl.lots[a] == original, "the ignored BrickLink lot was changed")
+            check(e.bl.lots[a] == marked, "the ignored BrickLink lot was not marked or its other fields changed")
             check(e.bo.qty(b) == 9, "the other lot did not sync")
             check(e.bo.active_count() == len(e.bl.lots) - 1, "the wrong lots were removed from Brick Owl")
-            check(e.bl.server.writes() == [], "wrote to BrickLink")
+            bl_writes = e.bl.server.writes()
+            check(len(bl_writes) == 1 and bl_writes[0][0] == "PUT" and bl_writes[0][1] == "/api/store/v1/inventories/%d" % a,
+                  "expected one BrickLink remarks update: %r" % (bl_writes,))
+            check(json.loads(bl_writes[0][3]).get("remarks") == marked["remarks"], "wrong BrickLink remarks marker")
             sale_updates = [body for body in owl_updates(e) if "sale_percent=" in body]
             check(len(sale_updates) == 1 and "sale_percent=%d" % percent in sale_updates[0], "sale was sent more than once before removal: %r" % sale_updates)
             warning = "sale %d percent did not appear on BrickOwl; removing it from BrickOwl and ignoring it permanently." % percent
@@ -89,7 +153,7 @@ def test_sale_not_shown_by_owl_is_ignored_forever():
             for _ in range(2):
                 check(e.cycle()["result"] == "ok", "cycle after Brick Owl recovered failed")
                 check(e.bo.find(a) is None, "the ignored lot returned after Brick Owl recovered")
-            check(e.bl.lots[a] == original, "later cycles changed the ignored BrickLink lot")
+            check(e.bl.lots[a] == marked, "later cycles changed the ignored BrickLink lot")
             e.bl.sale({a: 2})
             check(e.cycle()["result"] == "ok", "BrickLink sale of the ignored lot failed")
             check(e.bl.qty(a) == original["quantity"] - 2 and e.bl.lots[a]["sale_rate"] == percent, "the ignored BrickLink sale was changed")
@@ -101,12 +165,101 @@ def test_sale_not_shown_by_owl_is_ignored_forever():
             check(e.bo.find(a) is None, "the ignored lot returned after restart")
             check(e.bo.qty(b) == 9, "restart changed the other lot")
             check(e.bo.server.writes() == [], "Brick Owl was written after the lot was ignored: %r" % e.bo.server.writes())
-            check(e.bl.server.writes() == [], "wrote to BrickLink")
+            check(e.bl.server.writes() == bl_writes, "later cycles wrote to BrickLink")
             check(e.output().count(warning) == 1, "the ignored lot printed another warning")
             with open(e.path("data", "bricksync.owlignore.txt")) as f:
                 check(f.read() == ignored, "later cycles rewrote or duplicated the ignored lot")
         finally:
             e.cleanup()
+
+
+def test_full_bricklink_remarks_are_not_truncated_for_sale_marker():
+    e, (a, b) = start()
+    try:
+        e.bl.lots[a]["remarks"] = "A" * 255
+        e.bl.lots[a]["sale_rate"] = 25
+        original = dict(e.bl.lots[a])
+        e.bl.lots[b]["quantity"] = 9
+        e.bo.ignore_sale = True
+        status = e.cycle()
+        check(status["result"] == "ok", "a full remark prevented skipping the item")
+        check(e.bl.lots[a] == original, "a full BrickLink remark or another field was changed")
+        check(e.bl.server.writes() == [], "the full remark was written to BrickLink")
+        check(e.bo.find(a) is None and e.bo.qty(b) == 9, "the affected or unrelated Owl lot was wrong")
+        check("could not be marked with ~" in e.output(), "the missing marker was not reported")
+        with open(e.path("data", "bricksync.owlignore.txt")) as f:
+            check(any(line.split()[0] == str(a) for line in f if line.strip()), "the item was not recorded for skipping")
+    finally:
+        e.cleanup()
+
+
+def test_sale_marker_preserves_later_bricklink_remarks_and_description():
+    e, (a, b) = start()
+    try:
+        e.bl.lots[a]["remarks"] = "Old bin"
+        e.bl.lots[a]["description"] = "Old note"
+        e.bl.lots[a]["sale_rate"] = 25
+        e.bl.lots[b]["quantity"] = 9
+        e.bo.ignore_sale = True
+
+        def edit_after_initial_read():
+            e.bl.lots[a]["remarks"] = "New bin"
+            e.bl.lots[a]["description"] = "New note"
+
+        e.bl.on_inventory_read = edit_after_initial_read
+        check(e.cycle()["result"] == "ok", "cycle after the remark edit failed")
+        check(e.bl.lots[a]["remarks"] == "New bin~", "the newer remark was overwritten")
+        check(e.bl.lots[a]["description"] == "New note", "the newer public note was overwritten")
+        check(e.bo.find(a) is None and e.bo.qty(b) == 9, "the affected or unrelated Owl lot was wrong")
+        e.stop()
+        e.start()
+        check(e.status()["result"] == "ok" and e.bo.find(a) is None, "restart lost the sale marker")
+        check(e.bl.lots[a]["remarks"] == "New bin~" and e.bl.lots[a]["description"] == "New note", "restart changed the newer notes")
+    finally:
+        e.cleanup()
+
+
+def test_lost_bricklink_sale_marker_reply_is_checked_before_retry():
+    e, (a, b) = start()
+    try:
+        e.bl.lots[a]["remarks"] = "Bin A"
+        e.bl.lots[a]["sale_rate"] = 25
+        e.bl.lots[b]["quantity"] = 9
+        e.bo.ignore_sale = True
+        e.bl.server.fail("PUT", r"/inventories/\d+$", "drop_after", 1)
+        check(e.cycle()["result"] == "ok", "a recorded marker with a lost reply was not confirmed")
+        check(e.bl.lots[a]["remarks"] == "Bin A~", "the sale marker was lost or duplicated")
+        check(e.bo.find(a) is None and e.bo.qty(b) == 9, "the affected or unrelated Owl lot was wrong")
+        writes = e.bl.server.writes()
+        check(len(writes) == 1 and writes[0][4] == "drop_after", "the marker was written more than once: %r" % writes)
+        e.stop()
+        e.start()
+        check(e.status()["result"] == "ok" and e.bo.find(a) is None, "restart lost the marked item")
+        check(e.bl.lots[a]["remarks"] == "Bin A~" and len(e.bl.server.writes()) == 1, "restart repeated the marker")
+    finally:
+        e.cleanup()
+
+
+def test_failed_bricklink_sale_marker_still_skips_owl_lot():
+    e, (a, b) = start()
+    try:
+        e.bl.lots[a]["remarks"] = "Bin A"
+        e.bl.lots[a]["sale_rate"] = 25
+        e.bl.lots[b]["quantity"] = 9
+        original = dict(e.bl.lots[a])
+        e.bo.ignore_sale = True
+        e.bl.server.fail("PUT", r"/inventories/\d+$", "drop_before", 1)
+        check(e.cycle()["result"] == "ok", "a failed marker prevented skipping the item")
+        check(e.bl.lots[a] == original, "a failed marker changed the BrickLink lot")
+        check(e.bo.find(a) is None and e.bo.qty(b) == 9, "the affected or unrelated Owl lot was wrong")
+        check("could not be marked with ~" in e.output(), "the missing marker was not reported")
+        check(len(e.bl.server.writes()) == 1, "the marker was retried")
+        e.stop()
+        e.start()
+        check(e.status()["result"] == "ok" and e.bo.find(a) is None, "restart lost the skip")
+        check(e.bl.lots[a] == original and len(e.bl.server.writes()) == 1, "restart changed or retried the marker")
+    finally:
+        e.cleanup()
 
 
 def test_lost_sale_reply_does_not_ignore_working_lot():
