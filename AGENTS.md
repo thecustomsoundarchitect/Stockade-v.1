@@ -9,3 +9,7 @@ Keep Brick Owl closed through the planned first sync. Keep verification focused 
 ## Brick Owl outliers
 
 BrickLink is the primary store and Brick Owl is secondary. Skip a problem lot on Brick Owl and continue syncing unrelated lots. Tammy accepts even 10,000 parts missing from Brick Owl. Keep the existing skip behavior simple and continue regardless of how many parts are excluded.
+
+## Sales with many lots
+
+Process sales normally on both stores regardless of how many lots are in the order. Never throttle, delay, block, or cap a sale because of its lot count.
