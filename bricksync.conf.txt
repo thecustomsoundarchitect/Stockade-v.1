@@ -6,6 +6,13 @@ autocheck = 1;
 
 
 
+// Auto sync: BrickLink is the master.
+// Every five minutes BrickSync checks both stores for orders, reads the live BrickLink
+// inventory (your manual edits and uploads included) and updates BrickOwl to match.
+// A BrickOwl sale is deducted from BrickLink once. BrickLink is never overwritten from the saved copy.
+
+
+
 // BrickLink configuration
 bricklink.consumerkey = "";
 bricklink.consumersecret = "";

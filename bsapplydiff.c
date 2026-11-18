@@ -392,6 +392,31 @@ static void bsBrickLinkApplyDiffUpdate( bsContext *context, bsxItem *item, int i
 }
 
 
+/* Send one BrickLink update or delete (per the item's flags) and wait for its reply.
+   The caller owns the item; nothing is retried here, the result code is returned as is. */
+int bsBrickLinkApplySingle( bsContext *context, bsxItem *item )
+{
+  int result;
+  bsQueryReply *reply, *replynext;
+
+  DEBUG_SET_TRACKER();
+
+  if( item->flags & BSX_ITEM_XFLAGS_TO_DELETE )
+    bsBrickLinkApplyDiffDelete( context, item, 0 );
+  else
+    bsBrickLinkApplyDiffUpdate( context, item, 0 );
+  bsWaitBrickLinkQueries( context, 0 );
+  result = HTTP_RESULT_NOREPLY_ERROR;
+  for( reply = context->replylist.first ; reply ; reply = replynext )
+  {
+    replynext = reply->list.next;
+    result = reply->result;
+    bsFreeReply( context, reply );
+  }
+  return result;
+}
+
+
 /* Queue a batch of update queries for lots of the "diff" inventory */
 static int bsQueueBrickLinkApplyDiff( bsContext *context, bsWorkList *worklist, bsxInventory *diffinv )
 {
@@ -810,7 +835,23 @@ static void bsBrickOwlApplyDiffUpdate( bsContext *context, bsxItem *item, int it
   else
     ccGrowthPrintf( &postgrowth, "&external_id="CC_LLD"", (long long)item->lotid );
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_QUANTITY )
-    ccGrowthPrintf( &postgrowth, "&relative_quantity=%d", item->quantity );
+  {
+    /* Auto sync: the saved copy is the target, so the quantity is sent as it must end up.
+       Sent twice (a lost reply, a retry) it still ends up right; a relative change would count twice. */
+    bsxItem *targetitem;
+    targetitem = 0;
+    if( context->autosyncflag )
+    {
+      if( item->lotid >= 0 )
+        targetitem = bsxFindLotID( context->inventory, item->lotid );
+      if( !( targetitem ) && ( item->bolotid >= 0 ) )
+        targetitem = bsxFindOwlLotID( context->inventory, item->bolotid );
+    }
+    if( targetitem )
+      ccGrowthPrintf( &postgrowth, "&absolute_quantity=%d", ( targetitem->quantity > 0 ? targetitem->quantity : 0 ) );
+    else
+      ccGrowthPrintf( &postgrowth, "&relative_quantity=%d", item->quantity );
+  }
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_COMMENTS )
   {
     encodedstring = 0;
@@ -833,6 +874,8 @@ static void bsBrickOwlApplyDiffUpdate( bsContext *context, bsxItem *item, int it
     ccGrowthPrintf( &postgrowth, "&bulk_qty=%d", ( item->bulk > 0 ? item->bulk : 1 ) );
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_MYCOST )
     ccGrowthPrintf( &postgrowth, "&my_cost=%.3f", item->mycost );
+  if( item->flags & BSX_ITEM_XFLAGS_UPDATE_SALE )
+    ccGrowthPrintf( &postgrowth, "&sale_percent=%d", item->sale );
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_USEDGRADE )
   {
     conditionstring = 0;
@@ -883,6 +926,8 @@ static void bsBrickOwlApplyDiffUpdate( bsContext *context, bsxItem *item, int it
     ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "; Set mycost to %.3f", item->mycost );
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_USEDGRADE )
     ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "; Set usedgrade to %c", item->usedgrade );
+  if( item->flags & BSX_ITEM_XFLAGS_UPDATE_SALE )
+    ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "; Set sale to %d percent", item->sale );
   if( item->flags & BSX_ITEM_XFLAGS_UPDATE_TIERPRICES )
     ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "; Set tierprices to [[%d,%.3f],[%d,%.3f],[%d,%.3f]]", item->tq1, item->tp1, item->tq2, item->tp2, item->tq3, item->tp3 );
   ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "\n" );

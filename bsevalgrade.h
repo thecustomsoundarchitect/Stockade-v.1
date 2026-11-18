@@ -23,6 +23,10 @@
 
 int bsEvalulatePartCondition( char *comments );
 
+/* Stockade grading rule: 1 if the public note has one of the words picked by Tammy in it, 0 otherwise */
+int bsNoteDescribesDefect( const char *comments );
+
+
 enum
 {
   BS_EVAL_CONDITION_LIKE_NEW,

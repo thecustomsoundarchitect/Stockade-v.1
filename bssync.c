@@ -208,6 +208,12 @@ void bsSyncAddDeltaItem( bsContext *context, bsxInventory *deltainv, bsxItem *st
     updateflags |= BSX_ITEM_XFLAGS_UPDATE_USEDGRADE;
     ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "LOG: Set UsedGrade from %c to %c%s\n", item->usedgrade, stockitem->usedgrade, itemstringbuffer );
   }
+  /* Sale percentage: BrickOwl carries BrickLink's exact percentage, 0 when the BrickLink sale ended */
+  if( ( deltamode == BS_SYNC_DELTA_MODE_BRICKOWL ) && ( context->autosyncflag ) && ( item->sale != stockitem->sale ) )
+  {
+    updateflags |= BSX_ITEM_XFLAGS_UPDATE_SALE;
+    ioPrintf( &context->output, IO_MODEBIT_LOGONLY | IO_MODEBIT_NODATE, "LOG: Set Sale from %d to %d percent%s\n", item->sale, stockitem->sale, itemstringbuffer );
+  }
   if( !( bsInvItemTierEqual( item, stockitem ) ) )
   {
     updateflags |= BSX_ITEM_XFLAGS_UPDATE_TIERPRICES;
@@ -257,7 +263,7 @@ void bsSyncAddDeltaItem( bsContext *context, bsxInventory *deltainv, bsxItem *st
   stats->match_lotcount++;
 
   /* Track updatedata updates */
-  if( updateflags & ( BSX_ITEM_XFLAGS_UPDATE_PRICE | BSX_ITEM_XFLAGS_UPDATE_COMMENTS | BSX_ITEM_XFLAGS_UPDATE_REMARKS | BSX_ITEM_XFLAGS_UPDATE_BULK | BSX_ITEM_XFLAGS_UPDATE_MYCOST | BSX_ITEM_XFLAGS_UPDATE_USEDGRADE | BSX_ITEM_XFLAGS_UPDATE_TIERPRICES ) )
+  if( updateflags & ( BSX_ITEM_XFLAGS_UPDATE_PRICE | BSX_ITEM_XFLAGS_UPDATE_COMMENTS | BSX_ITEM_XFLAGS_UPDATE_REMARKS | BSX_ITEM_XFLAGS_UPDATE_BULK | BSX_ITEM_XFLAGS_UPDATE_MYCOST | BSX_ITEM_XFLAGS_UPDATE_USEDGRADE | BSX_ITEM_XFLAGS_UPDATE_TIERPRICES | BSX_ITEM_XFLAGS_UPDATE_SALE ) )
   {
     stats->updatedata_partcount += stockitem->quantity;
     stats->updatedata_lotcount++;

@@ -443,6 +443,16 @@ typedef struct
      done by the main loop between operations (bsReconnectServices), never mid-operation */
   int reconnectflag;
 
+  /* Auto sync: BrickLink is the master, see bsautosync.c */
+  int autosyncflag;
+  int autosyncinterval;
+  time_t autosynctime;
+  int autosyncfailcount;
+  int autosynccyclecount;
+  int autosyncalertsent;
+  struct bsAutoSyncLedger *autosyncledger;
+  char autosyncerror[512];
+
 } bsContext;
 
 /* Is automatic mode enabled? */
@@ -553,6 +563,27 @@ typedef struct
   int liststart;
   mmBitMap bitmap;
 } bsWorkList;
+
+
+/* Defined in bsautosync.c */
+
+#define BS_AUTOSYNC_LEDGER_FILE BS_GLOBAL_PATH "bricksync.blpending.txt"
+#define BS_AUTOSYNC_LEDGER_TEMP_FILE BS_GLOBAL_PATH "temp.bricksync.blpending.txt"
+#define BS_AUTOSYNC_STATUS_FILE BS_GLOBAL_PATH "autosync.status.json"
+#define BS_AUTOSYNC_STATUS_TEMP_FILE BS_GLOBAL_PATH "temp.autosync.status.json"
+#define BS_AUTOSYNC_INTERVAL_DEFAULT (5*60)
+#define BS_AUTOSYNC_ALERT_FAILCOUNT (4)
+
+void bsAutoSyncInit( bsContext *context );
+/* Run one cycle if one is due. Called by the main loop instead of the check/update/sync steps */
+void bsAutoSyncTick( bsContext *context );
+/* A BrickOwl order was merged: move the queued BrickLink deductions to the ledger file (in the order's journal) */
+int bsAutoSyncLedgerAddOrder( bsContext *context, int64_t orderid, journalDef *journal );
+/* A BrickLink order changed a lot's quantity on BrickLink by "quantity" (negative for a sale) */
+void bsAutoSyncLedgerBrickLinkOrder( bsContext *context, bsxInventory *modinv );
+int bsAutoSyncLedgerSave( bsContext *context, journalDef *journal );
+/* Send one BrickLink update or delete and wait for it, return the HTTP_RESULT code. Defined in bsapplydiff.c */
+int bsBrickLinkApplySingle( bsContext *context, bsxItem *item );
 
 
 /* Defined in bricksyncnet.c */

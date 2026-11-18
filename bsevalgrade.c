@@ -290,3 +290,47 @@ int bsEvalulatePartCondition( char *comments )
 ////
 
 
+
+
+////
+
+
+/* Stockade grading rule: a used item is Good. If its public note has one of the words below in it,
+   it is Acceptable. Sets are not graded by this rule.
+
+   TASK FOR TAMMY: pick the words. The list is empty until Tammy gives the words; nobody else picks
+   them. While it is empty every used item (except sets) is Good.
+   Each word goes on its own line, in lower case, inside quotes, followed by a comma, above the 0. */
+static const char * const bsDefectWords[] =
+{
+  0
+};
+
+int bsNoteDescribesDefect( const char *comments )
+{
+  int index, length, defectflag;
+  char *note;
+  char c;
+
+  if( !( comments ) )
+    return 0;
+  length = strlen( comments );
+  note = malloc( length + 1 );
+  for( index = 0 ; index < length ; index++ )
+  {
+    c = comments[index];
+    note[index] = ( ( c >= 'A' ) && ( c <= 'Z' ) ? c + ( 'a' - 'A' ) : c );
+  }
+  note[length] = 0;
+  defectflag = 0;
+  for( index = 0 ; bsDefectWords[index] ; index++ )
+  {
+    if( strstr( note, bsDefectWords[index] ) )
+    {
+      defectflag = 1;
+      break;
+    }
+  }
+  free( note );
+  return defectflag;
+}
